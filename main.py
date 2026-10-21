@@ -47,7 +47,13 @@ def ensure_device_in_edl(device: DeviceModel, dry_run: bool = False) -> bool:
 
     adb_dev = adb.wait_for_device(timeout=5)
     while not adb_dev and not edl.is_edl_connected():
-        show_adb_guidance(device)
+        stick = network.find_stick_device(dry_run=dry_run)
+        if stick:
+            ip, banner = stick
+            print(f"[+] Found OpenStick running Linux at {ip} ({banner})")
+            print("    To enter EDL mode: Unplug the stick, hold down the physical recovery button, and plug into USB.")
+        else:
+            show_adb_guidance(device)
         try:
             retry = input("Press [Enter] to scan again, or 'q' to cancel: ").strip().lower()
             if retry in ("q", "quit", "cancel"):
@@ -262,6 +268,96 @@ def handle_stock_recovery(
     return False
 
 
+def handle_create_release_image(
+    device: DeviceModel,
+    dry_run: bool = False,
+) -> bool:
+    """Dump full raw eMMC from device in EDL, sanitize sensitive data, and package release zip."""
+    print("\n" + "=" * 65)
+    print(f"       CREATING SANITIZED RELEASE IMAGE FOR {device.name.split()[0].upper()}")
+    print("=" * 65)
+
+    if not ensure_device_in_edl(device, dry_run=dry_run):
+        print("[-] Device must be in Qualcomm 9008 EDL mode to dump eMMC.", file=sys.stderr)
+        return False
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = (PROJECT_ROOT / ".cache" / "dry_run_backups" / f"{device.id}_release_{timestamp}") if dry_run else (PROJECT_ROOT / "backups" / f"{device.id}_release_{timestamp}")
+    calibration_dir = PROJECT_ROOT / "calibration"
+    loader = edl.resolve_loader(device.recommended_loader)
+
+    print(f"[*] Target backup destination: {backup_dir.name}")
+    success = edl.execute_raw_emmc_backup(
+        backup_dir=backup_dir,
+        calibration_dir=calibration_dir,
+        loader=loader,
+        dry_run=dry_run,
+    )
+
+    if not success:
+        print("[-] eMMC dump failed or was cancelled.", file=sys.stderr)
+        return False
+
+    raw_image = backup_dir / "full_emmc.bin"
+    if not raw_image.exists():
+        print(f"[-] Dump file not found: {raw_image}", file=sys.stderr)
+        return False
+
+    # Reboot device back so it is not stuck in EDL mode
+    print("[*] eMMC dump complete. Rebooting device (edl reset)...")
+    edl.run_edl_command(["reset"], loader=loader, dry_run=dry_run)
+
+    print("\n[*] Sanitizing raw eMMC dump offline...")
+    print("    - Zeroing unique IMEI, radio calibration, and private data partitions...")
+    print("    - Cleaning rootfs command history, SSH keys, and system logs...")
+    print("    - Ensuring /usr/local/bin/led-test is installed in rootfs...")
+    ok, summary = edl.sanitize_raw_image(raw_image, clean_rootfs=True, dry_run=dry_run)
+    if not ok:
+        print("[-] Sanitization failed.", file=sys.stderr)
+        return False
+
+    print("\n[+] Offline sanitization completed successfully!")
+    print("-" * 65)
+    print(f"{'Partition':<16} {'Start Sector':<14} {'Sectors':<12} {'Size':<10}")
+    print("-" * 65)
+    for s in summary:
+        print(f"{s['partition']:<16} {s['start_sector']:<14} {s['num_sectors']:<12} {format_size(s['byte_size']):<10}")
+    print("-" * 65)
+
+    # Package into dist/
+    dist_dir = PROJECT_ROOT / "dist"
+    zip_path = dist_dir / f"openstick-{device.id}-linux.zip"
+    print(f"\n[*] Packaging sanitized firmware into {zip_path.name}...")
+    compress_ok, digest = edl.compress_raw_image_to_zip(
+        image_path=raw_image,
+        output_zip=zip_path,
+        dry_run=dry_run,
+    )
+
+    if not compress_ok:
+        print("[-] Packaging release zip failed.", file=sys.stderr)
+        return False
+
+    # Also update local cache if cached releases exist
+    local_cached_img = PROJECT_ROOT / ".cache" / "releases" / "v0.0.1" / f"openstick-{device.id}-linux" / "full_emmc.bin"
+    if local_cached_img.parent.exists() and not dry_run:
+        try:
+            print(f"[*] Updating local release cache at {local_cached_img.parent.name}...")
+            shutil.copy2(str(raw_image), str(local_cached_img))
+        except Exception:
+            pass
+
+    print("\n" + "=" * 65)
+    print("       RELEASE IMAGE GENERATION COMPLETED SUCCESSFULLY")
+    print("=" * 65)
+    print(f"  • Image Archive:  {zip_path.relative_to(PROJECT_ROOT) if not dry_run else zip_path.name} ({format_size(zip_path.stat().st_size) if zip_path.exists() else 'N/A'})")
+    print(f"  • SHA-256 Digest: {digest}")
+    print(f"  • Calibration:    Saved safely in {calibration_dir.relative_to(PROJECT_ROOT) if not dry_run else calibration_dir.name}/")
+    print("  • Includes:       /usr/local/bin/led-test pre-installed")
+    print("=" * 65 + "\n")
+    return True
+
+
 def handle_sanitize_image(image_path_str: str) -> bool:
     """Sanitize a raw eMMC image dump for public release."""
     image_path = Path(image_path_str).resolve()
@@ -295,6 +391,7 @@ def main():
     parser.add_argument("--skip-bootstrap", action="store_true", help="Skip virtual environment bootstrap check")
     parser.add_argument("--board", "--model", type=str, help="Specify board directly (e.g. uz801)")
     parser.add_argument("--sanitize-image", type=str, help="Zero out unique partitions from a full_emmc.bin image")
+    parser.add_argument("--create-release", action="store_true", help="Dump raw eMMC, sanitize, and package new release zip")
     parser.add_argument("--find", action="store_true", help="Scan network to find connected OpenStick running Linux")
     args = parser.parse_args()
 
@@ -308,6 +405,16 @@ def main():
         ensure_environment(project_root=PROJECT_ROOT, dry_run=args.dry_run)
 
     print_banner()
+
+    # Create release image CLI flag
+    if args.create_release:
+        board_id = args.board or "uz801"
+        dev = get_device_by_id(board_id)
+        if not dev:
+            print(f"[-] Unknown board: '{board_id}'. Currently supporting: 'uz801'.", file=sys.stderr)
+            sys.exit(1)
+        success = handle_create_release_image(dev, dry_run=args.dry_run)
+        sys.exit(0 if success else 1)
 
     # Network scanner CLI flag
     if args.find:
@@ -353,12 +460,14 @@ def main():
                 print(f"[+] Found existing backup in: {latest_backup.name}")
                 edl.extract_partitions_from_raw_image(latest_backup / "full_emmc.bin", calibration_dir)
 
-    # Step 3: Action Selection (Install Linux vs. Restore Stock Backup vs. Exit)
+    # Step 3: Action Selection (Install Linux vs. Restore Stock Backup vs. Create Release vs. Exit)
     action = show_action_menu(device)
     if action == "linux":
         handle_linux_install(device, dry_run=args.dry_run)
     elif action == "stock":
         handle_stock_recovery(device, dry_run=args.dry_run)
+    elif action == "release":
+        handle_create_release_image(device, dry_run=args.dry_run)
     else:
         print("\n[+] Exiting flasher. Your backups and calibration files are saved.")
         sys.exit(0)

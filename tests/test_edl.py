@@ -21,6 +21,9 @@ from openstick.edl import (
     flash_raw_emmc_via_edl,
     has_valid_calibration,
     find_latest_valid_backup,
+    clean_rootfs_sensitive_data,
+    compress_raw_image_to_zip,
+    find_debugfs,
     DEFAULT_CALIBRATION_PARTITIONS,
     ALL_CALIBRATION_PARTITIONS,
 )
@@ -200,6 +203,26 @@ class TestEdl(unittest.TestCase):
         self.assertTrue(run_edl_command(["reset"]))
         reset_cmd = mock_subproc.call_args_list[-1][0][0]
         self.assertNotIn("--memory=eMMC", reset_cmd)
+
+
+    def test_clean_rootfs_sensitive_data_dry_run(self):
+        ok, items = clean_rootfs_sensitive_data(self.synthetic_image, dry_run=True)
+        self.assertTrue(ok)
+        self.assertGreater(len(items), 0)
+
+    def test_compress_raw_image_to_zip_dry_run(self):
+        out_zip = self.test_dir / "test_out.zip"
+        ok, sha = compress_raw_image_to_zip(self.synthetic_image, out_zip, dry_run=True)
+        self.assertTrue(ok)
+        self.assertEqual(sha, "mocksha256")
+        self.assertTrue(out_zip.exists())
+        self.assertTrue(out_zip.with_suffix(".zip.sha256").exists())
+
+    def test_find_debugfs(self):
+        # Should return a Path or None depending on system, but must not crash
+        p = find_debugfs()
+        if p is not None:
+            self.assertTrue(p.exists())
 
 
 if __name__ == "__main__":

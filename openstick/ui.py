@@ -168,19 +168,24 @@ def show_action_menu(device: DeviceModel) -> str:
     print("      injects your unique calibration partitions, and flashes via EDL.")
     print("  [2] Restore Stock Backup")
     print(f"      Flashes your original raw eMMC backup from backups/ to restore Android.")
-    print("  [3] Exit")
+    print("  [3] Create Sanitized Release Image (Dump from Stick & Clean)")
+    print(f"      Dumps raw eMMC from device, extracts calibration to calibration/,")
+    print(f"      cleans sensitive data, and packages dist/openstick-{device.id}-linux.zip.")
+    print("  [4] Exit")
     print("-" * 65)
 
     while True:
         try:
-            choice = input("Please select action [1-3] or 'q' to quit: ").strip().lower()
+            choice = input("Please select action [1-4] or 'q' to quit: ").strip().lower()
             if choice in ("1", "debian", "linux", "install"):
                 return "linux"
             elif choice in ("2", "stock", "restore"):
                 return "stock"
-            elif choice in ("3", "q", "quit", "exit"):
+            elif choice in ("3", "dump", "release", "image", "clean"):
+                return "release"
+            elif choice in ("4", "3_legacy", "q", "quit", "exit"):
                 return "exit"
-            print("[-] Invalid selection. Enter 1, 2, or 3.")
+            print("[-] Invalid selection. Enter 1, 2, 3, or 4.")
         except (KeyboardInterrupt, EOFError):
             print("\nAborted.")
             sys.exit(1)
@@ -205,6 +210,8 @@ def show_post_install_info(mode: str, detected_ip: Optional[str] = None):
             print("     • Password: openstick")
             print("     • Stick IP: 192.168.4.1 (or 192.168.5.1)")
             print("     • SSH:      ssh user@192.168.4.1 (Password: 1)")
+            print("\n  3. Test Hardware LEDs:")
+            print("     • Command:  led-test (or 'led-test --help' for options)")
         else:
             print("          CONGRATULATIONS! DEBIAN LINUX IS NOW INSTALLED")
             print("=" * 65)
@@ -221,6 +228,8 @@ def show_post_install_info(mode: str, detected_ip: Optional[str] = None):
             print("     • Password: openstick")
             print("     • Stick IP: 192.168.4.1 (or 192.168.5.1)")
             print("     • SSH:      ssh user@192.168.4.1 (Password: 1)")
+            print("\n  3. Test Hardware LEDs:")
+            print("     • Command:  led-test (or 'led-test --help' for options)")
     else:
         print("          STOCK FACTORY FIRMWARE RESTORED")
         print("=" * 65)

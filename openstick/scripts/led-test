@@ -1,0 +1,171 @@
+#!/bin/bash
+#
+# led-test: OpenStick UZ801 Sequential LED Flasher
+# Sequentially blinks Red (Power) -> Green (WLAN) -> Blue (WAN) LEDs.
+#
+
+# Auto-elevate to root via sudo if needed
+if [ "$(id -u)" -ne 0 ]; then
+    exec sudo "$0" "$@"
+fi
+
+INTERVAL=0.5
+COUNT=0
+
+show_help() {
+    cat << EOF
+Usage: led-test [OPTIONS] [INTERVAL] [COUNT]
+
+Sequentially flashes the UZ801 status LEDs:
+  Red (Power) -> Green (WLAN) -> Blue (WAN)
+
+Arguments:
+  INTERVAL              Blink delay in seconds (default: 0.5)
+  COUNT                 Number of cycles to run (default: 0 = infinite)
+
+Options:
+  -i, --interval SEC    Set interval in seconds (e.g., 0.2, 0.5, 1.0)
+  -c, --count NUM       Number of cycles to run before exiting
+  -h, --help            Show this help message
+
+Examples:
+  led-test              # Run indefinitely with 0.5s interval
+  led-test 0.2          # Run indefinitely with 0.2s interval
+  led-test 0.3 5        # Run 5 cycles with 0.3s interval
+  led-test -i 0.2 -c 10 # Run 10 cycles with 0.2s interval
+EOF
+    exit 0
+}
+
+# Parse options and arguments
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            show_help
+            ;;
+        -i|--interval)
+            INTERVAL="$2"
+            shift 2
+            ;;
+        -c|--count)
+            COUNT="$2"
+            shift 2
+            ;;
+        -*)
+            echo "[-] Unknown option: $1" >&2
+            echo "    Run 'led-test --help' for usage." >&2
+            exit 1
+            ;;
+        *)
+            if [ -z "$POS1" ]; then
+                POS1="$1"
+                INTERVAL="$1"
+            elif [ -z "$POS2" ]; then
+                POS2="$1"
+                COUNT="$1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+LED_BASE="/sys/class/leds"
+
+# Detect target LEDs in priority order (UZ801 RGB order)
+CANDIDATES=("red:power" "green:wlan" "blue:wan")
+LEDS=()
+
+for name in "${CANDIDATES[@]}"; do
+    if [ -d "$LED_BASE/$name" ]; then
+        LEDS+=("$name")
+    fi
+done
+
+# Fallback: if UZ801 named LEDs not detected, scan for non-MMC LEDs
+if [ ${#LEDS[@]} -eq 0 ]; then
+    for path in "$LED_BASE"/*; do
+        [ -d "$path" ] || continue
+        bname=$(basename "$path")
+        if [[ "$bname" != mmc* && "$bname" != *default* ]]; then
+            LEDS+=("$bname")
+        fi
+    done
+fi
+
+if [ ${#LEDS[@]} -eq 0 ]; then
+    echo "[-] No controllable LEDs found in $LED_BASE" >&2
+    exit 1
+fi
+
+echo "================================================="
+echo "       OpenStick UZ801 LED Test Utility          "
+echo "================================================="
+echo "[*] Active LEDs: ${LEDS[*]}"
+echo "[*] Interval:    ${INTERVAL}s"
+if [ "$COUNT" -gt 0 ]; then
+    echo "[*] Cycles:      $COUNT"
+else
+    echo "[*] Cycles:      Infinite (Press Ctrl+C to stop)"
+fi
+echo "================================================="
+
+# Save original triggers and brightness states
+declare -A ORIG_TRIGGERS
+declare -A ORIG_BRIGHTNESS
+declare -A MAX_BRIGHTNESS
+
+for led in "${LEDS[@]}"; do
+    trig_raw=$(cat "$LED_BASE/$led/trigger" 2>/dev/null)
+    # Extract bracketed trigger e.g. [none] or [heartbeat]
+    active_trig=$(echo "$trig_raw" | grep -o '\[[^]]*\]' | tr -d '[]')
+    ORIG_TRIGGERS["$led"]="${active_trig:-none}"
+    ORIG_BRIGHTNESS["$led"]=$(cat "$LED_BASE/$led/brightness" 2>/dev/null || echo 0)
+    MAX_BRIGHTNESS["$led"]=$(cat "$LED_BASE/$led/max_brightness" 2>/dev/null || echo 1)
+done
+
+cleanup() {
+    echo -e "\n[*] Restoring original LED states..."
+    for led in "${LEDS[@]}"; do
+        # Restore trigger first
+        echo "${ORIG_TRIGGERS["$led"]}" > "$LED_BASE/$led/trigger" 2>/dev/null
+        # Restore brightness
+        echo "${ORIG_BRIGHTNESS["$led"]}" > "$LED_BASE/$led/brightness" 2>/dev/null
+    done
+    echo "[+] Done. Exiting."
+    exit 0
+}
+
+trap cleanup INT TERM EXIT
+
+# Set trigger to none so we have full manual control
+for led in "${LEDS[@]}"; do
+    echo none > "$LED_BASE/$led/trigger" 2>/dev/null
+    echo 0 > "$LED_BASE/$led/brightness" 2>/dev/null
+done
+
+cycle=0
+while true; do
+    cycle=$((cycle + 1))
+    if [ "$COUNT" -gt 0 ]; then
+        echo -n "[*] Cycle $cycle/$COUNT: "
+    else
+        echo -n "[*] Cycle $cycle: "
+    fi
+
+    for led in "${LEDS[@]}"; do
+        color_label=$(echo "$led" | cut -d: -f1 | tr '[:lower:]' '[:upper:]')
+        echo -n "[$color_label] "
+        
+        # Turn LED ON
+        echo "${MAX_BRIGHTNESS["$led"]}" > "$LED_BASE/$led/brightness" 2>/dev/null
+        sleep "$INTERVAL"
+        
+        # Turn LED OFF
+        echo 0 > "$LED_BASE/$led/brightness" 2>/dev/null
+    done
+    echo ""
+
+    if [ "$COUNT" -gt 0 ] && [ "$cycle" -ge "$COUNT" ]; then
+        break
+    fi
+done

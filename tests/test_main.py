@@ -53,5 +53,17 @@ class TestMain(unittest.TestCase):
         self.assertIn("INSTALLING OPENSTICK LINUX", output)
 
 
+    @patch("sys.argv", ["main.py", "--board", "uz801", "--create-release", "--dry-run"])
+    def test_main_create_release_dry_run(self):
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            with self.assertRaises(SystemExit) as cm:
+                main()
+        self.assertEqual(cm.exception.code, 0)
+        output = captured.getvalue()
+        self.assertIn("CREATING SANITIZED RELEASE IMAGE", output)
+        self.assertIn("RELEASE IMAGE GENERATION COMPLETED SUCCESSFULLY", output)
+
+
 if __name__ == "__main__":
     unittest.main()

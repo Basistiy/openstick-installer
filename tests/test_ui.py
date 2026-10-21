@@ -59,6 +59,11 @@ class TestUI(unittest.TestCase):
         self.assertEqual(show_action_menu(dev), "stock")
 
     @patch("builtins.input", return_value="3")
+    def test_show_action_menu_release(self, _):
+        dev = get_device_by_id("uz801")
+        self.assertEqual(show_action_menu(dev), "release")
+
+    @patch("builtins.input", return_value="4")
     def test_show_action_menu_exit(self, _):
         dev = get_device_by_id("uz801")
         self.assertEqual(show_action_menu(dev), "exit")

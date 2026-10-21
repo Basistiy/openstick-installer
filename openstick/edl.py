@@ -409,11 +409,18 @@ def extract_partitions_from_raw_image(
 def sanitize_raw_image(
     image_path: Path,
     wipe_partitions: Optional[List[str]] = None,
+    clean_rootfs: bool = True,
+    dry_run: bool = False,
 ) -> Tuple[bool, List[Dict]]:
     """
     Wipe unique IMEI, radio calibration, and user data in-place by writing 0x00 bytes.
+    Also cleans sensitive rootfs files (.bash_history, ssh known_hosts, logs).
     Makes a raw eMMC dump safe to distribute publicly.
     """
+    if dry_run:
+        print(f"[DRY-RUN] Simulating sanitization of {image_path.name}...")
+        return True, [{"partition": p, "start_sector": 0, "num_sectors": 100, "byte_size": 51200} for p in (wipe_partitions or DEFAULT_SANITIZE_PARTITIONS)]
+
     if wipe_partitions is None:
         wipe_partitions = DEFAULT_SANITIZE_PARTITIONS
 
@@ -449,7 +456,172 @@ def sanitize_raw_image(
 
         f.flush()
 
+    # Pass 2: Clean rootfs sensitive files (logs, history) and ensure led-test is installed
+    if clean_rootfs:
+        clean_rootfs_sensitive_data(image_path, inject_led_test=True, dry_run=dry_run)
+
     return True, wiped_summary
+
+
+def find_debugfs() -> Optional[Path]:
+    """Find e2fsprogs debugfs binary across platforms."""
+    candidates = [
+        shutil.which("debugfs"),
+        "/opt/homebrew/opt/e2fsprogs/sbin/debugfs",
+        "/opt/homebrew/sbin/debugfs",
+        "/usr/local/opt/e2fsprogs/sbin/debugfs",
+        "/usr/local/sbin/debugfs",
+        "/usr/sbin/debugfs",
+        "/sbin/debugfs",
+    ]
+    for c in candidates:
+        if c:
+            p = Path(c)
+            if p.is_file() and os.access(p, os.X_OK):
+                return p
+    return None
+
+
+def clean_rootfs_sensitive_data(
+    image_path: Path,
+    inject_led_test: bool = True,
+    dry_run: bool = False,
+) -> Tuple[bool, List[str]]:
+    """
+    Remove sensitive user artifacts (.bash_history, ssh known_hosts, logs)
+    directly from the ext4 rootfs partition inside a raw eMMC image using debugfs.
+    Also ensures /usr/local/bin/led-test is injected with mode 0755.
+    """
+    if dry_run:
+        print(f"[DRY-RUN] Simulating rootfs sensitive data cleanup on {image_path.name}...")
+        return True, ["(dry-run) sensitive files cleaned", "(dry-run) led-test injected"]
+
+    try:
+        gpt = parse_gpt_from_raw_image(image_path)
+    except Exception as e:
+        print(f"[-] Cannot parse GPT for rootfs cleanup: {e}", file=sys.stderr)
+        return False, []
+
+    rootfs_info = gpt.get("rootfs") or gpt.get("userdata")
+    if not rootfs_info:
+        return True, []
+
+    offset = rootfs_info["byte_offset"]
+    # Check if partition contains valid ext4 superblock magic (0xef53 at offset 1024 + 0x38)
+    try:
+        with open(image_path, "rb") as f:
+            f.seek(offset + 1080)
+            magic = f.read(2)
+            if magic != b"\x53\xef":
+                return True, []
+    except Exception:
+        return True, []
+
+    debugfs_bin = find_debugfs()
+    if not debugfs_bin:
+        print("[!] Warning: debugfs (e2fsprogs) not found. Skipping offline rootfs cleanup.", file=sys.stderr)
+        return False, []
+
+    cleaned_items = []
+    debugfs_target = f"{image_path}?offset={offset}"
+
+    files_to_remove = [
+        "/home/user/.bash_history",
+        "/root/.bash_history",
+        "/home/user/.ssh/known_hosts",
+        "/root/.ssh/known_hosts",
+        "/home/user/.ssh/authorized_keys",
+        "/root/.ssh/authorized_keys",
+        "/var/log/wtmp",
+        "/var/log/btmp",
+        "/var/log/lastlog",
+        "/var/log/auth.log",
+        "/var/log/syslog",
+        "/var/log/messages",
+    ]
+
+    commands = [f"rm {f}" for f in files_to_remove]
+    cleaned_items.extend(files_to_remove)
+
+    if inject_led_test:
+        repo_root = Path(__file__).resolve().parent.parent
+        led_test_script = repo_root / "openstick" / "scripts" / "led-test"
+        if led_test_script.exists():
+            commands.extend([
+                f"write {led_test_script} /usr/local/bin/led-test",
+                "set_inode_field /usr/local/bin/led-test mode 0100755",
+                "set_inode_field /usr/local/bin/led-test uid 0",
+                "set_inode_field /usr/local/bin/led-test gid 0",
+            ])
+            cleaned_items.append("/usr/local/bin/led-test (injected)")
+
+    cmd_script = "\n".join(commands) + "\n"
+
+    try:
+        subprocess.run(
+            [str(debugfs_bin), "-w", debugfs_target],
+            input=cmd_script,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return True, cleaned_items
+    except Exception as e:
+        print(f"[-] Error executing debugfs rootfs cleanup: {e}", file=sys.stderr)
+        return False, []
+
+
+def compress_raw_image_to_zip(
+    image_path: Path,
+    output_zip: Path,
+    dry_run: bool = False,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Compress a raw eMMC image (full_emmc.bin) into a zip archive with deflate compression
+    and return (success, sha256_hash).
+    """
+    if dry_run:
+        print(f"[DRY-RUN] Simulating compression of {image_path.name} to {output_zip.name}...")
+        output_zip.parent.mkdir(parents=True, exist_ok=True)
+        output_zip.write_bytes(b"PKmockzip")
+        sha_file = output_zip.with_suffix(".zip.sha256")
+        sha_file.write_text(f"mocksha256  {output_zip.name}\n")
+        return True, "mocksha256"
+
+    import hashlib
+    import zipfile
+
+    output_zip.parent.mkdir(parents=True, exist_ok=True)
+    temp_zip = output_zip.with_suffix(".tmp.zip")
+    if temp_zip.exists():
+        temp_zip.unlink()
+
+    print(f"[*] Compressing {image_path.name} into {output_zip.name} (this takes ~1-2 mins)...")
+    try:
+        with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as zf:
+            zf.write(image_path, arcname="full_emmc.bin")
+
+        if output_zip.exists():
+            output_zip.unlink()
+        shutil.move(str(temp_zip), str(output_zip))
+
+        # Calculate sha256
+        print(f"[*] Calculating SHA-256 checksum for {output_zip.name}...")
+        hasher = hashlib.sha256()
+        with open(output_zip, "rb") as f:
+            while c := f.read(65536):
+                hasher.update(c)
+        digest = hasher.hexdigest()
+
+        sha_file = output_zip.with_suffix(".zip.sha256")
+        sha_file.write_text(f"{digest}  {output_zip.name}\n")
+        print(f"[+] SHA-256: {digest}")
+        return True, digest
+    except Exception as e:
+        print(f"\n[-] Failed compressing raw image: {e}", file=sys.stderr)
+        if temp_zip.exists():
+            temp_zip.unlink()
+        return False, None
 
 
 def inject_partitions_into_raw_image(
