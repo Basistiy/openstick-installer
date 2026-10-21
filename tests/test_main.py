@@ -45,7 +45,7 @@ class TestMain(unittest.TestCase):
     @patch("builtins.input", side_effect=["y", "1"])
     def test_main_board_flow_dry_run(self, mock_input):
         captured = io.StringIO()
-        with patch("sys.stdout", captured):
+        with patch("main.PROJECT_ROOT", self.test_dir), patch("sys.stdout", captured):
             main()
         output = captured.getvalue()
         self.assertIn("UZ801 (4G LTE USB Modem Dongle)", output)
@@ -56,7 +56,7 @@ class TestMain(unittest.TestCase):
     @patch("sys.argv", ["main.py", "--board", "uz801", "--create-release", "--dry-run"])
     def test_main_create_release_dry_run(self):
         captured = io.StringIO()
-        with patch("sys.stdout", captured):
+        with patch("main.PROJECT_ROOT", self.test_dir), patch("sys.stdout", captured):
             with self.assertRaises(SystemExit) as cm:
                 main()
         self.assertEqual(cm.exception.code, 0)

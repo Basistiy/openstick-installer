@@ -548,6 +548,7 @@ def clean_rootfs_sensitive_data(
         led_test_script = repo_root / "openstick" / "scripts" / "led-test"
         if led_test_script.exists():
             commands.extend([
+                "rm /usr/local/bin/led-test",
                 f"write {led_test_script} /usr/local/bin/led-test",
                 "set_inode_field /usr/local/bin/led-test mode 0100755",
                 "set_inode_field /usr/local/bin/led-test uid 0",
@@ -681,6 +682,18 @@ def inject_partitions_into_raw_image(
     return True, injected
 
 
+def _is_file_non_zero(file_path: Path) -> bool:
+    """Return True if the file contains at least one non-zero byte."""
+    try:
+        with open(file_path, "rb") as f:
+            while chunk := f.read(65536):
+                if chunk != b"\x00" * len(chunk):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Backup & Restore Workflows
 # ---------------------------------------------------------------------------
@@ -706,13 +719,9 @@ def execute_raw_emmc_backup(
         # Create minimal synthetic raw image for dry-run verification
         create_synthetic_raw_image(image_path)
         archived_calib = backup_dir / "calibration"
-        archived_calib.mkdir(parents=True, exist_ok=True)
-        for p in DEFAULT_CALIBRATION_PARTITIONS:
-            (archived_calib / f"{p}.bin").write_bytes(b"\x01" * 1024)
+        extract_partitions_from_raw_image(image_path, archived_calib)
         if calibration_dir:
-            calibration_dir.mkdir(parents=True, exist_ok=True)
-            for p in DEFAULT_CALIBRATION_PARTITIONS:
-                (calibration_dir / f"{p}.bin").write_bytes(b"\x01" * 1024)
+            extract_partitions_from_raw_image(image_path, calibration_dir)
         return True
 
     print(f"[*] Dumping full raw eMMC to: {image_path.name} (this takes ~8-10 minutes)...")
@@ -754,6 +763,10 @@ def verify_raw_backup(
     meta = gpt.get("__metadata__", {})
     expected_bytes = meta.get("total_bytes", 0)
     actual_bytes = image_path.stat().st_size
+    min_required_bytes = max(
+        (info["byte_offset"] + info["byte_size"] for k, info in gpt.items() if k != "__metadata__"),
+        default=0,
+    )
 
     # Check calibration files in backup_dir/calibration or backup_dir
     calib_dir = backup_dir / "calibration"
@@ -777,7 +790,11 @@ def verify_raw_backup(
 
         size = cp_file.stat().st_size
         if size == 0:
-            empty_partitions.append(f"{cp}.bin (0 bytes)")
+            empty_partitions.append(f"{cp_file.name} (0 bytes)")
+            continue
+
+        if cp != "fsc" and not _is_file_non_zero(cp_file):
+            empty_partitions.append(f"{cp_file.name} (all zeros / sanitized)")
             continue
 
         verified_partitions.append({
@@ -790,7 +807,7 @@ def verify_raw_backup(
     is_complete = (
         len(missing_critical) == 0
         and len(empty_partitions) == 0
-        and actual_bytes > 0
+        and actual_bytes >= min_required_bytes > 0
     )
 
     report = {
@@ -851,7 +868,7 @@ def has_valid_calibration(
     calibration_dir: Path,
     critical_partitions: Optional[List[str]] = None,
 ) -> bool:
-    """Check if calibration_dir contains non-empty files for all critical partitions."""
+    """Check if calibration_dir contains non-empty, non-zeroed files for all critical partitions."""
     if critical_partitions is None:
         critical_partitions = DEFAULT_CALIBRATION_PARTITIONS
 
@@ -861,30 +878,95 @@ def has_valid_calibration(
     for cp in critical_partitions:
         b_file = calibration_dir / f"{cp}.bin"
         i_file = calibration_dir / f"{cp}.img"
-        valid = (b_file.exists() and b_file.stat().st_size > 0) or (i_file.exists() and i_file.stat().st_size > 0)
-        if not valid:
+        candidate = b_file if (b_file.exists() and b_file.stat().st_size > 0) else (
+            i_file if (i_file.exists() and i_file.stat().st_size > 0) else None
+        )
+        if candidate is None:
+            return False
+        if cp != "fsc" and not _is_file_non_zero(candidate):
             return False
 
     return True
 
 
-def find_latest_valid_backup(project_root: Path, device_id: str) -> Optional[Path]:
-    """Find the most recent valid backup directory containing full_emmc.bin."""
+def _is_raw_image_sanitized(image_path: Path, gpt: Dict[str, Dict]) -> bool:
+    """Return True if modemst1 is present in GPT and contains only 0x00 bytes."""
+    if "modemst1" not in gpt:
+        return False
+    info = gpt["modemst1"]
+    try:
+        with open(image_path, "rb") as f:
+            f.seek(info["byte_offset"])
+            remaining = info["byte_size"]
+            while remaining > 0:
+                chunk = f.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                if chunk != b"\x00" * len(chunk):
+                    return False
+                remaining -= len(chunk)
+        return True
+    except OSError:
+        return True
+
+
+def find_latest_valid_backup(
+    project_root: Path,
+    device_id: str,
+    require_stock: bool = False,
+) -> Optional[Path]:
+    """
+    Find the most recent valid backup directory containing an unsanitized full_emmc.bin.
+    Excludes release dump folders ('_release_') and, when require_stock=True,
+    prioritizes Stock Android backups (containing 'system' in GPT) over Linux dumps.
+    """
     backups_dir = project_root / "backups"
     if not backups_dir.exists():
         return None
 
+    prefix = f"{device_id.lower()}_"
     candidates = sorted(
-        [d for d in backups_dir.iterdir() if d.is_dir() and d.name.lower().startswith(f"{device_id.lower()}_")],
+        [
+            d for d in backups_dir.iterdir()
+            if d.is_dir()
+            and d.name.lower().startswith(prefix)
+            and "_release_" not in d.name.lower()
+        ],
         key=lambda x: x.name,
         reverse=True,
     )
 
+    valid_candidates: List[Tuple[bool, Path]] = []
     for c in candidates:
-        if (c / "full_emmc.bin").exists() and (c / "full_emmc.bin").stat().st_size > 0:
-            return c
+        img = c / "full_emmc.bin"
+        if not img.exists() or img.stat().st_size == 0:
+            continue
 
-    return None
+        is_stock_layout = False
+        try:
+            gpt = parse_gpt_from_raw_image(img)
+            if _is_raw_image_sanitized(img, gpt):
+                continue
+            is_stock_layout = "system" in gpt
+        except Exception:
+            # Allow minimal test files without full GPT if calibration sidecars aren't zeroed
+            pass
+
+        calib_subdir = c / "calibration"
+        if calib_subdir.exists() and not has_valid_calibration(calib_subdir):
+            continue
+
+        valid_candidates.append((is_stock_layout, c))
+
+    if not valid_candidates:
+        return None
+
+    if require_stock:
+        for is_stock_layout, c in valid_candidates:
+            if is_stock_layout:
+                return c
+
+    return valid_candidates[0][1]
 
 
 # ---------------------------------------------------------------------------
@@ -900,19 +982,21 @@ def create_synthetic_raw_image(
     Generate a minimal synthetic raw eMMC image containing a valid Protective MBR,
     Primary GPT Header, and partition entries array for testing.
     """
+    import zlib
+
     if partitions is None:
-        # (label, start_sector, num_sectors)
+        # Compact sector counts for fast unit tests and dry-runs (~2.7 MB file)
         partitions = [
-            ("sbl1", 40, 1024),
+            ("sbl1", 40, 64),
             ("fsc", 4096, 2),
-            ("fsg", 4098, 3072),
-            ("modem", 7170, 131072),
-            ("modemst1", 138242, 3072),
-            ("modemst2", 141314, 3072),
-            ("persist", 144386, 65536),
-            ("sec", 209922, 32),
-            ("boot", 209954, 65536),
-            ("rootfs", 275490, 4194304),
+            ("fsg", 4098, 64),
+            ("modem", 4200, 128),
+            ("modemst1", 4400, 64),
+            ("modemst2", 4500, 64),
+            ("persist", 4600, 128),
+            ("sec", 4800, 32),
+            ("boot", 4900, 128),
+            ("rootfs", 5100, 256),
         ]
 
     sector_size = 512
@@ -940,7 +1024,22 @@ def create_synthetic_raw_image(
         struct.pack_into("<I", mbr, 446 + 12, min(0xFFFFFFFF, num_total_sectors - 1))
         f.write(mbr)
 
-        # 2. Primary GPT Header (Sector 1, offset 512)
+        # 2. Build Partition Entries Array (Sector 2, offset 1024)
+        entries_buf = bytearray(num_part_entries * part_entry_size)
+        type_guid = bytes.fromhex("ebd0a0a2b9e5443387c068b6b72699c7")  # Basic Data
+        for i, (name, start, count) in enumerate(partitions):
+            entry = bytearray(part_entry_size)
+            entry[0:16] = type_guid
+            entry[16:32] = bytes.fromhex(f"{i:032x}")
+            end = start + count - 1
+            struct.pack_into("<QQQ", entry, 32, start, end, 0)
+            name_utf16 = name.encode("utf-16le")[:72]
+            entry[56 : 56 + len(name_utf16)] = name_utf16
+            entries_buf[i * part_entry_size : (i + 1) * part_entry_size] = entry
+
+        entries_crc = zlib.crc32(entries_buf) & 0xFFFFFFFF
+
+        # 3. Primary GPT Header (Sector 1, offset 512)
         f.seek(512)
         gpt_header = bytearray(512)
         struct.pack_into("<8s", gpt_header, 0, b"EFI PART")
@@ -953,21 +1052,14 @@ def create_synthetic_raw_image(
         struct.pack_into("<Q", gpt_header, 72, 2)   # Partition entries LBA
         struct.pack_into("<I", gpt_header, 80, num_part_entries)
         struct.pack_into("<I", gpt_header, 84, part_entry_size)
+        struct.pack_into("<I", gpt_header, 88, entries_crc)
+        header_crc = zlib.crc32(gpt_header[:92]) & 0xFFFFFFFF
+        struct.pack_into("<I", gpt_header, 16, header_crc)
         f.write(gpt_header)
 
-        # 3. Partition Entries Array (Sector 2, offset 1024)
+        # Write Partition Entries Array
         f.seek(1024)
-        type_guid = bytes.fromhex("ebd0a0a2b9e5443387c068b6b72699c7")  # Basic Data
-        for i, (name, start, count) in enumerate(partitions):
-            entry = bytearray(part_entry_size)
-            entry[0:16] = type_guid
-            entry[16:32] = bytes.fromhex(f"{i:032x}")
-            end = start + count - 1
-            struct.pack_into("<QQQ", entry, 32, start, end, 0)
-            name_utf16 = name.encode("utf-16le")[:72]
-            entry[56 : 56 + len(name_utf16)] = name_utf16
-            f.seek(1024 + i * part_entry_size)
-            f.write(entry)
+        f.write(entries_buf)
 
         # Write dummy data into partition sectors
         for name, start, count in partitions:

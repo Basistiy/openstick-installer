@@ -6,6 +6,7 @@ Cross-platform utility to backup stock partitions and install Linux on MSM8916 U
 
 import argparse
 import datetime
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -236,7 +237,7 @@ def handle_stock_recovery(
     loader = edl.resolve_loader(device.recommended_loader)
 
     # 1. Locate latest backup with full_emmc.bin
-    backup_dir = edl.find_latest_valid_backup(PROJECT_ROOT, device.id)
+    backup_dir = edl.find_latest_valid_backup(PROJECT_ROOT, device.id, require_stock=True)
     if not backup_dir and not dry_run:
         print("[-] No valid full_emmc.bin backup found in backups/.", file=sys.stderr)
         return False
@@ -339,13 +340,18 @@ def handle_create_release_image(
         return False
 
     # Also update local cache if cached releases exist
-    local_cached_img = PROJECT_ROOT / ".cache" / "releases" / "v0.0.1" / f"openstick-{device.id}-linux" / "full_emmc.bin"
-    if local_cached_img.parent.exists() and not dry_run:
-        try:
-            print(f"[*] Updating local release cache at {local_cached_img.parent.name}...")
-            shutil.copy2(str(raw_image), str(local_cached_img))
-        except Exception:
-            pass
+    releases_cache_root = PROJECT_ROOT / ".cache" / "releases"
+    if releases_cache_root.exists() and not dry_run:
+        for cached_tag_dir in releases_cache_root.iterdir():
+            if not cached_tag_dir.is_dir():
+                continue
+            local_cached_img = cached_tag_dir / f"openstick-{device.id}-linux" / "full_emmc.bin"
+            if local_cached_img.parent.exists():
+                try:
+                    print(f"[*] Updating local release cache at {cached_tag_dir.name}/{local_cached_img.parent.name}...")
+                    shutil.copy2(str(raw_image), str(local_cached_img))
+                except Exception:
+                    pass
 
     print("\n" + "=" * 65)
     print("       RELEASE IMAGE GENERATION COMPLETED SUCCESSFULLY")
@@ -451,7 +457,7 @@ def main():
             print("[+] Backup finished successfully!")
     else:
         print("\n[*] Skipping partition backup at user request.")
-        calibration_dir = PROJECT_ROOT / "calibration"
+        calibration_dir = (PROJECT_ROOT / ".cache" / "dry_run_calibration") if args.dry_run else (PROJECT_ROOT / "calibration")
         if edl.has_valid_calibration(calibration_dir, device.critical_partitions):
             print(f"[+] Found existing calibration partitions in: {calibration_dir.resolve()}")
         else:

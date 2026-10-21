@@ -168,6 +168,14 @@ class TestEdl(unittest.TestCase):
         (calib_dir / "modemst1.img").write_bytes(b"\x01" * 512)
         self.assertTrue(has_valid_calibration(calib_dir))
 
+        # fsc is allowed to be all-zero on hardware
+        (calib_dir / "fsc.bin").write_bytes(b"\x00" * 512)
+        self.assertTrue(has_valid_calibration(calib_dir))
+
+        # Zeroed-out modemst1 (sanitized) must be rejected
+        (calib_dir / "modemst1.img").write_bytes(b"\x00" * 512)
+        self.assertFalse(has_valid_calibration(calib_dir))
+
     def test_find_latest_valid_backup(self):
         backups_dir = self.test_dir / "backups"
         backups_dir.mkdir()
@@ -181,6 +189,11 @@ class TestEdl(unittest.TestCase):
         new_dir = backups_dir / "uz801_20261020_120000"
         new_dir.mkdir()
         (new_dir / "full_emmc.bin").write_bytes(b"\x01" * 1024)
+
+        # Sanitized release dump directory must be ignored even though 'uz801_release_' sorts after 'uz801_2026'
+        rel_dir = backups_dir / "uz801_release_20261021_120000"
+        rel_dir.mkdir()
+        (rel_dir / "full_emmc.bin").write_bytes(b"\x01" * 1024)
 
         found = find_latest_valid_backup(self.test_dir, "uz801")
         self.assertIsNotNone(found)
