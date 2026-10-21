@@ -1,5 +1,5 @@
 @echo off
-REM OpenStick Linux Flasher launcher for Windows
+REM OpenStick Linux Installer launcher for Windows
 cd /d "%~dp0"
 where py >nul 2>nul
 if %ERRORLEVEL% equ 0 (

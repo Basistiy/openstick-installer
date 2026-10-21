@@ -1,4 +1,4 @@
-"""User Interface helpers and menu presentation for OpenStick Flasher."""
+"""User Interface helpers and menu presentation for OpenStick Installer."""
 
 import sys
 from pathlib import Path
@@ -14,7 +14,7 @@ def print_banner():
  | | | | '_ \ / _ \ '_ \\___ \| __| |/ __| |/ /
  | |_| | |_) |  __/ | | |___) | |_| | (__|   < 
   \___/| .__/ \___|_| |_|____/ \__|_|\___|_|\_\
-       |_|  MSM8916 Linux Flasher v0.1.0
+       |_|  MSM8916 Linux Installer v0.1.0
 =====================================================
 """
     print(banner)
@@ -57,10 +57,10 @@ def show_other_board_message():
     print("\n" + "=" * 68)
     print("                     BOARD SUPPORT REQUEST")
     print("=" * 68)
-    print("Currently, OpenStick Flasher officially supports the UZ801 board.")
+    print("Currently, OpenStick Installer officially supports the UZ801 board.")
     print("We are actively expanding support for additional MSM8916 boards!\n")
     print("Please open a GitHub issue to request support for your board:")
-    print("  👉 https://github.com/Basistiy/openstick-flasher/issues\n")
+    print("  👉 https://github.com/Basistiy/openstick-installer/issues\n")
     print("Helpful details to include in your issue:")
     print("  • Board name / model printed on the casing")
     print("  • PCB silk markings / revision (e.g. UZ801-V3, SP970, MF70, etc.)")

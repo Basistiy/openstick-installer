@@ -9,4 +9,4 @@ This directory stores Qualcomm Firehose programmer binaries (`.mbn` / `.elf`) us
 1. From OpenStick or Firehose-Finder repository collections:
    - https://github.com/hoplik/Firehose-Finder
    - https://github.com/bkerler/Loaders
-2. The flasher will auto-detect any loader placed in this folder or match device-specific recommendations.
+2. The installer will auto-detect any loader placed in this folder or match device-specific recommendations.

@@ -1,4 +1,4 @@
-"""Bootstrap and virtual environment manager for openstick-flasher."""
+"""Bootstrap and virtual environment manager for openstick-installer."""
 
 import os
 import sys
@@ -71,7 +71,7 @@ def download_and_extract_zip(url: str, dest_dir: Path) -> bool:
     try:
         req = urllib.request.Request(
             url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; OpenStickFlasher/1.0)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; OpenStickInstaller/1.0)"},
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
             zip_bytes = resp.read()
@@ -99,6 +99,14 @@ def download_and_extract_zip(url: str, dest_dir: Path) -> bool:
     except Exception as e:
         print(f"[-] Failed to download/extract zip: {e}", file=sys.stderr)
         return False
+
+
+def _get_pip_cmd(pip_bin: Path) -> List[str]:
+    """Return a pip command list using 'python -m pip' to survive folder renames."""
+    python_candidate = pip_bin.parent / ("python.exe" if sys.platform == "win32" else "python")
+    if python_candidate.exists():
+        return [str(python_candidate), "-m", "pip"]
+    return [str(pip_bin)]
 
 
 def ensure_edl_tool(project_root: Path, pip_bin: Path) -> bool:
@@ -134,17 +142,18 @@ def ensure_edl_tool(project_root: Path, pip_bin: Path) -> bool:
 
     if edl_dir.exists():
         print("[*] Configuring local edl package and dependencies...")
+        pip_cmd = _get_pip_cmd(pip_bin)
         edl_req = edl_dir / "requirements.txt"
         if edl_req.exists():
             subprocess.run(
-                [str(pip_bin), "install", "-r", str(edl_req)],
+                pip_cmd + ["install", "-r", str(edl_req)],
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
         try:
             subprocess.run(
-                [str(pip_bin), "install", "--no-deps", "-e", str(edl_dir)],
+                pip_cmd + ["install", "--no-deps", "-e", str(edl_dir)],
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -162,18 +171,19 @@ def install_requirements(pip_bin: Path, req_file: Path, project_root: Optional[P
         print(f"[-] Requirements file not found: {req_file}", file=sys.stderr)
         return False
 
+    pip_cmd = _get_pip_cmd(pip_bin)
     print(f"[*] Installing required dependencies from {req_file.name}...")
     try:
         # Upgrade pip first (silently ignore if fails)
         subprocess.run(
-            [str(pip_bin), "install", "--upgrade", "pip"],
+            pip_cmd + ["install", "--upgrade", "pip"],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         # Install requirements
         subprocess.run(
-            [str(pip_bin), "install", "-r", str(req_file)],
+            pip_cmd + ["install", "-r", str(req_file)],
             check=True,
             text=True,
         )
@@ -230,7 +240,7 @@ def ensure_environment(project_root: Optional[Path] = None, dry_run: bool = Fals
 
     # Case 3: Running from system Python - automatically set up .venv
     print("\n" + "=" * 60)
-    print("       OpenStick Flasher - Automatic Setup")
+    print("       OpenStick Installer - Automatic Setup")
     print("=" * 60)
     print("[*] Preparing local virtual environment and installing dependencies...")
 

@@ -1,6 +1,6 @@
-# OpenStick Flasher
+# OpenStick Installer
 
-Cross-platform, minimal-action flashing tool for the OpenStick community to turn Qualcomm Snapdragon 410 (MSM8916) Android USB dongles into Debian Linux devices using 1:1 raw eMMC images and Qualcomm Emergency Download (9008 EDL) mode.
+Cross-platform, minimal-action installation and flashing tool for the OpenStick community to turn Qualcomm Snapdragon 410 (MSM8916) Android USB dongles into Debian Linux devices using 1:1 raw eMMC images and Qualcomm Emergency Download (9008 EDL) mode.
 
 ---
 
@@ -22,15 +22,15 @@ Cross-platform, minimal-action flashing tool for the OpenStick community to turn
 Clone the repository to your computer:
 
 ```bash
-git clone https://github.com/Basistiy/openstick-flasher.git
-cd openstick-flasher
+git clone https://github.com/Basistiy/openstick-installer.git
+cd openstick-installer
 ```
 
-### 1. Launch the Flasher
+### 1. Launch the Installer
 
-- **Windows**: Double-click [`run.bat`](file:///Users/evgeniibasistyi/Documents/GitHub/openstick-flasher/run.bat)
-- **macOS**: Double-click [`run.command`](file:///Users/evgeniibasistyi/Documents/GitHub/openstick-flasher/run.command)
-- **Linux**: Double-click [`run.sh`](file:///Users/evgeniibasistyi/Documents/GitHub/openstick-flasher/run.sh) (or execute `./run.sh` in terminal)
+- **Windows**: Double-click `run.bat`
+- **macOS**: Double-click `run.command`
+- **Linux**: Double-click `run.sh` (or execute `./run.sh` in terminal)
 
 *Note: You do not need to manually configure Python virtual environments or install pip packages; the script sets up everything on its first run.*
 
@@ -57,7 +57,7 @@ flowchart TD
 ## Directory Structure
 
 ```text
-openstick-flasher/
+openstick-installer/
 ├── run.command              # macOS double-clickable launcher
 ├── run.bat                  # Windows double-clickable launcher
 ├── run.sh                   # Linux launcher (auto-attaches terminal emulator)
@@ -82,7 +82,7 @@ openstick-flasher/
 
 ## Manual Calibration Files (`calibration/`)
 
-If you previously dumped your partitions using QFIL, Qualcomm EDL (`edl r`), or Android `dd`, simply drop your files into the [`calibration/`](file:///Users/evgeniibasistyi/Documents/GitHub/openstick-flasher/calibration) folder before flashing:
+If you previously dumped your partitions using QFIL, Qualcomm EDL (`edl r`), or Android `dd`, simply drop your files into the `calibration/` folder before flashing:
 
 - `modemst1.bin` (or `modemst1.img`)
 - `modemst2.bin` (or `modemst2.img`)

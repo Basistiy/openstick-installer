@@ -2,7 +2,7 @@
 
 ## 1. Goal & Architecture Overview
 
-O`penstick-installer` - **Windows-style 1:1 raw eMMC image** workflow (`full_emmc.bin`) powered entirely by **Qualcomm 9008 EDL mode** (`edl rf` / `edl wf`), while keeping **ADB strictly as an optional convenience helper** (`adb reboot edl`) to enter EDL mode without pressing physical board buttons.
+`openstick-installer` - **Windows-style 1:1 raw eMMC image** workflow (`full_emmc.bin`) powered entirely by **Qualcomm 9008 EDL mode** (`edl rf` / `edl wf`), while keeping **ADB strictly as an optional convenience helper** (`adb reboot edl`) to enter EDL mode without pressing physical board buttons.
 
 ### Core Principles
 1. **ADB Only for Entry, EDL for Everything Else**:

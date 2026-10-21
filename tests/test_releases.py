@@ -46,7 +46,7 @@ class TestReleases(unittest.TestCase):
 
     def test_calculate_sha256(self):
         test_file = self.test_dir / "sample.bin"
-        test_file.write_bytes(b"OpenStick Flasher Test Content")
+        test_file.write_bytes(b"OpenStick Installer Test Content")
         digest = calculate_sha256(test_file)
         self.assertIsInstance(digest, str)
         self.assertEqual(len(digest), 64)
