@@ -15,7 +15,7 @@ This directory holds the unique cellular calibration and device-specific partiti
 
 ## How to Use
 1. **Automatic Extraction (Recommended)**:
-   - When you select your board and agree to backup original partitions, OpenStick Flasher automatically slices these partitions from your device's eMMC dump directly into this `calibration/` folder.
+   - When you select your board and agree to backup original partitions, OpenStick Installer automatically slices these partitions from your device's eMMC dump directly into this `calibration/` folder.
 2. **Manual Placement**:
    - If you previously dumped partitions using QFIL, Qualcomm EDL (`edl r`), or another tool, copy your `.bin` or `.img` files directly into this directory before running `run.command` / `run.bat` / `run.sh`.
 

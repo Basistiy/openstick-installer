@@ -1,4 +1,4 @@
-"""Bootstrap and virtual environment manager for openstick-flasher."""
+"""Bootstrap and virtual environment manager for openstick-installer."""
 
 import os
 import sys
@@ -71,7 +71,7 @@ def download_and_extract_zip(url: str, dest_dir: Path) -> bool:
     try:
         req = urllib.request.Request(
             url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; OpenStickFlasher/1.0)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; OpenStickInstaller/1.0)"},
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
             zip_bytes = resp.read()
@@ -230,7 +230,7 @@ def ensure_environment(project_root: Optional[Path] = None, dry_run: bool = Fals
 
     # Case 3: Running from system Python - automatically set up .venv
     print("\n" + "=" * 60)
-    print("       OpenStick Flasher - Automatic Setup")
+    print("       OpenStick Installer - Automatic Setup")
     print("=" * 60)
     print("[*] Preparing local virtual environment and installing dependencies...")
 

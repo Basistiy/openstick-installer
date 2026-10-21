@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# macOS double-clickable Terminal launcher for OpenStick Flasher
+# macOS double-clickable Terminal launcher for OpenStick Installer
 
 # Resolve actual script directory (Terminal opens .command files in $HOME by default)
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
-# Launch flasher with python3
+# Launch installer with python3
 python3 main.py "$@"
 
 # Keep terminal window open on completion

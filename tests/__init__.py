@@ -1,1 +1,1 @@
-"""OpenStick Flasher unit test package."""
+"""OpenStick Installer unit test package."""

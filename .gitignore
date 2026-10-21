@@ -180,7 +180,7 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# OpenStick Flasher specific
+# OpenStick Installer specific
 backups/*
 !backups/.gitkeep
 calibration/*.bin

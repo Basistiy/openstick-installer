@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-DEFAULT_GITHUB_REPO = "Basistiy/openstick-flasher"
+DEFAULT_GITHUB_REPO = "Basistiy/openstick-installer"
 
 
 def _urlopen_with_cert_fallback(req: urllib.request.Request, timeout: int = 30):
@@ -37,7 +37,7 @@ def get_latest_release(repo: str = DEFAULT_GITHUB_REPO) -> Optional[Dict]:
     """
     url = f"https://api.github.com/repos/{repo}/releases"
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; OpenStickFlasher/1.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; OpenStickInstaller/1.0)",
         "Accept": "application/vnd.github.v3+json",
     }
     req = urllib.request.Request(url, headers=headers)
@@ -99,7 +99,7 @@ def download_with_progress(url: str, output_path: Path, expected_size: Optional[
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_suffix(output_path.suffix + ".part")
 
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; OpenStickFlasher/1.0)"}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; OpenStickInstaller/1.0)"}
     req = urllib.request.Request(url, headers=headers)
 
     try:

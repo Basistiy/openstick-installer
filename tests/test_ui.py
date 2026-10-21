@@ -31,7 +31,7 @@ class TestUI(unittest.TestCase):
 
         self.assertIsNone(dev)
         output = captured.getvalue()
-        self.assertIn("https://github.com/Basistiy/openstick-flasher/issues", output)
+        self.assertIn("https://github.com/Basistiy/openstick-installer/issues", output)
         self.assertIn("BOARD SUPPORT REQUEST", output)
 
     def test_format_size(self):

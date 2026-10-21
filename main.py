@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-OpenStick Linux Flasher
-Cross-platform utility to backup stock partitions and flash Linux on MSM8916 USB sticks.
+OpenStick Installer
+Cross-platform utility to backup stock partitions and install Linux on MSM8916 USB sticks.
 """
 
 import argparse
@@ -98,7 +98,7 @@ def handle_partition_backup(device: DeviceModel, dry_run: bool = False) -> Tuple
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     backups_root = (PROJECT_ROOT / ".cache" / "dry_run_backups") if dry_run else (PROJECT_ROOT / "backups")
     backup_dir = backups_root / f"{device.id}_{timestamp}"
-    calibration_dir = PROJECT_ROOT / "calibration"
+    calibration_dir = (PROJECT_ROOT / ".cache" / "dry_run_calibration") if dry_run else (PROJECT_ROOT / "calibration")
     loader = edl.resolve_loader(device.recommended_loader)
 
     print(f"[*] Target backup destination: {backup_dir.relative_to(PROJECT_ROOT) if not dry_run else backup_dir}")
@@ -134,7 +134,7 @@ def handle_linux_install(
     print(f"       INSTALLING OPENSTICK LINUX (DEBIAN) FOR {device.name.split()[0].upper()}")
     print("=" * 65)
 
-    calibration_dir = PROJECT_ROOT / "calibration"
+    calibration_dir = (PROJECT_ROOT / ".cache" / "dry_run_calibration") if dry_run else (PROJECT_ROOT / "calibration")
     loader = edl.resolve_loader(device.recommended_loader)
 
     # 1. Safety check: ensure calibration files exist
@@ -283,7 +283,7 @@ def handle_create_release_image(
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_dir = (PROJECT_ROOT / ".cache" / "dry_run_backups" / f"{device.id}_release_{timestamp}") if dry_run else (PROJECT_ROOT / "backups" / f"{device.id}_release_{timestamp}")
-    calibration_dir = PROJECT_ROOT / "calibration"
+    calibration_dir = (PROJECT_ROOT / ".cache" / "dry_run_calibration") if dry_run else (PROJECT_ROOT / "calibration")
     loader = edl.resolve_loader(device.recommended_loader)
 
     print(f"[*] Target backup destination: {backup_dir.name}")
@@ -325,7 +325,7 @@ def handle_create_release_image(
     print("-" * 65)
 
     # Package into dist/
-    dist_dir = PROJECT_ROOT / "dist"
+    dist_dir = (PROJECT_ROOT / ".cache" / "dry_run_dist") if dry_run else (PROJECT_ROOT / "dist")
     zip_path = dist_dir / f"openstick-{device.id}-linux.zip"
     print(f"\n[*] Packaging sanitized firmware into {zip_path.name}...")
     compress_ok, digest = edl.compress_raw_image_to_zip(
@@ -386,7 +386,7 @@ def handle_sanitize_image(image_path_str: str) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="OpenStick MSM8916 Linux Flasher")
+    parser = argparse.ArgumentParser(description="OpenStick MSM8916 Linux Installer")
     parser.add_argument("--dry-run", action="store_true", help="Simulate execution without modifying hardware")
     parser.add_argument("--skip-bootstrap", action="store_true", help="Skip virtual environment bootstrap check")
     parser.add_argument("--board", "--model", type=str, help="Specify board directly (e.g. uz801)")
@@ -469,7 +469,7 @@ def main():
     elif action == "release":
         handle_create_release_image(device, dry_run=args.dry_run)
     else:
-        print("\n[+] Exiting flasher. Your backups and calibration files are saved.")
+        print("\n[+] Exiting installer. Your backups and calibration files are saved.")
         sys.exit(0)
 
 
