@@ -9,6 +9,7 @@ from openstick.adb import (
     get_adb_devices,
     prepare_root,
     reboot_to_edl,
+    reboot_to_bootloader,
     wait_for_device,
 )
 
@@ -50,6 +51,20 @@ class TestAdb(unittest.TestCase):
 
     def test_reboot_to_edl_dry_run(self):
         self.assertTrue(reboot_to_edl(dry_run=True))
+
+    def test_reboot_to_bootloader_dry_run(self):
+        self.assertTrue(reboot_to_bootloader(dry_run=True))
+
+    @patch("openstick.adb.subprocess.run")
+    def test_reboot_to_bootloader_success(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        self.assertTrue(reboot_to_bootloader(serial="test_serial"))
+        mock_run.assert_called_once_with(
+            ["adb", "-s", "test_serial", "reboot", "bootloader"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
 
     @patch("openstick.adb.get_adb_devices")
     def test_wait_for_device_found(self, mock_get):

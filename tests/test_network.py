@@ -7,6 +7,7 @@ from openstick.network import (
     get_candidate_ips,
     find_stick_device,
     wait_for_debian_boot,
+    reboot_stick_to_bootloader,
     DEFAULT_CANDIDATE_IPS,
 )
 
@@ -27,6 +28,22 @@ class TestNetwork(unittest.TestCase):
     def test_wait_for_debian_boot_dry_run(self):
         ip = wait_for_debian_boot(timeout=2, dry_run=True)
         self.assertEqual(ip, "192.168.5.1")
+
+    def test_reboot_stick_to_bootloader_dry_run(self):
+        self.assertTrue(reboot_stick_to_bootloader("192.168.5.1", dry_run=True))
+
+    @patch("openstick.network.shutil.which")
+    @patch("openstick.network.subprocess.run")
+    def test_reboot_stick_to_bootloader_ssh(self, mock_run, mock_which):
+        def fake_which(cmd):
+            if cmd == "ssh":
+                return "/usr/bin/ssh"
+            return None
+        mock_which.side_effect = fake_which
+        mock_run.return_value = MagicMock(returncode=0)
+
+        self.assertTrue(reboot_stick_to_bootloader("192.168.5.1"))
+        self.assertTrue(mock_run.called)
 
 
 if __name__ == "__main__":

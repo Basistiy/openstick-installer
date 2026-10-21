@@ -4,10 +4,13 @@ Locates connected sticks via USB Ethernet (CDC-ECM/RNDIS) and Wi-Fi,
 and identifies active SSH endpoints with default credentials.
 """
 
+import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from typing import List, Optional, Tuple
 
@@ -192,3 +195,109 @@ def print_discovery_summary(ip: Optional[str] = None, banner: Optional[str] = No
     print("  • Stick IP: 192.168.4.1")
     print(f"  • SSH:      ssh {DEFAULT_SSH_USER}@192.168.4.1 (Password: {DEFAULT_SSH_PASSWORD})")
     print("=" * 65 + "\n")
+
+
+def reboot_stick_to_bootloader(
+    ip: str,
+    user: str = DEFAULT_SSH_USER,
+    password: str = DEFAULT_SSH_PASSWORD,
+    port: int = DEFAULT_SSH_PORT,
+    dry_run: bool = False,
+) -> bool:
+    """
+    Issue a remote reboot command over SSH to restart an OpenStick running Linux
+    into Bootloader / Fastboot mode (or directly EDL).
+    Handles standard OpenStick Debian credentials ('user' / '1' with passwordless sudo).
+    """
+    if dry_run:
+        print(f"[DRY-RUN] Simulating SSH command to {user}@{ip}: 'sudo systemctl reboot bootloader'...")
+        return True
+
+    ssh_bin = shutil.which("ssh")
+    if not ssh_bin:
+        return False
+
+    # Command sequence to trigger reboot into bootloader / fastboot
+    remote_cmd = (
+        "sudo systemctl reboot bootloader 2>/dev/null "
+        "|| sudo reboot bootloader 2>/dev/null "
+        "|| sudo systemctl reboot edl 2>/dev/null "
+        "|| sudo reboot edl 2>/dev/null "
+        "|| sudo reboot 2>/dev/null"
+    )
+
+    ssh_opts = [
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=5",
+        "-o", "LogLevel=ERROR",
+        "-p", str(port),
+    ]
+
+    target = f"{user}@{ip}"
+
+    # Method 1: sshpass if available
+    sshpass_bin = shutil.which("sshpass")
+    if sshpass_bin:
+        try:
+            subprocess.run(
+                [sshpass_bin, "-p", password, ssh_bin] + ssh_opts + [target, remote_cmd],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return True
+        except subprocess.TimeoutExpired:
+            return True
+        except Exception:
+            pass
+
+    # Method 2: SSH_ASKPASS on Unix (macOS / Linux)
+    if sys.platform != "win32":
+        askpass_script = None
+        try:
+            with tempfile.NamedTemporaryFile("w", delete=False) as f:
+                f.write(f"#!/bin/sh\necho '{password}'\n")
+                askpass_script = f.name
+            os.chmod(askpass_script, 0o755)
+
+            env = os.environ.copy()
+            env["SSH_ASKPASS"] = askpass_script
+            env["SSH_ASKPASS_REQUIRE"] = "force"
+            env["DISPLAY"] = ":0"
+
+            subprocess.run(
+                [ssh_bin] + ssh_opts + [target, remote_cmd],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return True
+        except subprocess.TimeoutExpired:
+            return True
+        except Exception:
+            pass
+        finally:
+            if askpass_script and os.path.exists(askpass_script):
+                try:
+                    os.remove(askpass_script)
+                except OSError:
+                    pass
+
+    # Method 3: Direct SSH invocation (works if SSH keys or passwordless SSH is configured)
+    try:
+        subprocess.run(
+            [ssh_bin] + ssh_opts + [target, remote_cmd],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        return True
+    except subprocess.TimeoutExpired:
+        return True
+    except Exception:
+        pass
+
+    return False
+

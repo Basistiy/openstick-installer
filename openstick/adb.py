@@ -111,6 +111,25 @@ def reboot_to_edl(serial: Optional[str] = None, dry_run: bool = False) -> bool:
         return False
 
 
+def reboot_to_bootloader(serial: Optional[str] = None, dry_run: bool = False) -> bool:
+    """Reboot connected device into Bootloader / Fastboot mode."""
+    if dry_run:
+        print("[DRY-RUN] Simulating 'adb reboot bootloader'...")
+        return True
+
+    cmd = ["adb"]
+    if serial:
+        cmd.extend(["-s", serial])
+    cmd.extend(["reboot", "bootloader"])
+
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return res.returncode == 0
+    except subprocess.SubprocessError as e:
+        print(f"[-] ADB reboot bootloader command failed: {e}")
+        return False
+
+
 def wait_for_device(timeout: int = 20) -> Optional[AdbDevice]:
     """Poll for a connected and authorized ADB device within timeout seconds."""
     start = time.time()

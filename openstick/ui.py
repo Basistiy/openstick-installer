@@ -103,21 +103,29 @@ def prompt_backup_partitions() -> bool:
 
 
 def show_adb_guidance(device: DeviceModel):
-    """Show guidance when device is not in EDL mode and no ADB device is detected."""
-    print("\n" + "!" * 60)
-    print("  Device not detected in EDL mode or ADB!")
-    print("!" * 60)
+    """Show guidance when device is not in EDL mode and no software interface was found."""
+    print("\n" + "!" * 65)
+    print("       Device not detected in EDL, Fastboot, or ADB Mode")
+    print("!" * 65)
     print("To enter Emergency Download (EDL / 9008) mode:")
-    print("\nOption A (Via Software / ADB - easiest):")
-    print(f"  1. Connect your PC to the stick's Wi-Fi network.")
-    print(f"  2. Open {device.adb_enable_url} in your browser and enable USB Debug.")
-    print("  3. Unplug and re-plug the stick into USB.")
-    print("\nOption B (Via Hardware Button / Testpoint):")
+    print("\nSoftware Options (No opening casing / no button needed):")
+    print("  • If stick is running Android:")
+    print(f"    1. Connect PC to stick's Wi-Fi network.")
+    print(f"    2. Open {device.adb_enable_url} in browser and toggle USB Debug ON.")
+    print("    3. Plug stick into USB — installer will reboot it automatically.")
+    print("  • If stick is running Linux (Debian):")
+    print("    1. SSH to the stick:  ssh user@192.168.5.1  (Password: 1)")
+    print("    2. Run command:       sudo systemctl reboot bootloader")
+    print("    3. The installer will catch it in Fastboot and reboot into EDL mode.")
+    print("  • If stick is in Fastboot mode:")
+    print("    Run command:         fastboot oem reboot-edl")
+    print("\nHardware Option (Recovery Button or EDL Pins):")
     print("  1. Unplug the stick from USB.")
-    print("  2. Hold down the physical recovery button on the board.")
-    print("  3. While holding the button, plug the stick into your PC's USB port.")
-    print("  4. Release the button after 3 seconds.")
-    print("!" * 60 + "\n")
+    print("  2. Hold down the physical recovery button on the board,")
+    print("     or short the two EDL test pins/pads with tweezers.")
+    print("  3. While holding the button or shorting pins, plug into USB.")
+    print("  4. Release the button / pins after 3 seconds.")
+    print("!" * 65 + "\n")
 
 
 def format_size(bytes_val: int) -> str:

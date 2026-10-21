@@ -33,7 +33,8 @@ DEVICES: Dict[str, DeviceModel] = {
         critical_partitions=["modemst1", "modemst2", "fsg", "fsc", "persist", "sec"],
         notes=[
             "To enable ADB: Connect to its Wi-Fi, open http://192.168.100.1/usbdebug.html in a browser, and toggle USB debug on.",
-            "If soft-reboot to EDL fails: Hold the physical recovery button while plugging into USB.",
+            "Fastboot reboot command: fastboot oem reboot-edl transitions directly to EDL mode.",
+            "If soft-reboot to EDL fails: Hold physical recovery button or short EDL pins while plugging into USB.",
             "Critical calibration partitions: modemst1, modemst2, fsg, fsc, persist, sec (contain unique IMEI and RF calibration).",
         ],
     ),

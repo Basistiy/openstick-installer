@@ -8,7 +8,7 @@ Cross-platform, minimal-action installation and flashing tool for the OpenStick 
 
 - **Zero-Fuss Setup**: Automatically initializes a local Python virtual environment (`.venv`) and installs all required dependencies (`pyusb`, `pyserial`, `bkerler/edl`, etc.) with zero user intervention.
 - **Double-Click Launchers**: Native one-click launchers for **Windows** (`run.bat`), **macOS** (`run.command`), and **Linux** (`run.sh`).
-- **Automated EDL Transition**: Reboots stock Android sticks into Qualcomm 9008 EDL mode via ADB automatically (`adb reboot edl`) without needing to take the casing apart or hold physical buttons.
+- **Automated EDL Transition**: Reboots sticks into Qualcomm 9008 EDL mode automatically via Fastboot (`fastboot oem reboot-edl`), ADB (`adb reboot edl`), or Linux SSH (`sudo systemctl reboot bootloader`), avoiding the need to dismantle casings, hold recovery buttons, or short EDL pins whenever possible.
 - **Full eMMC Clone**: Dumps a complete 1:1 raw eMMC image (`full_emmc.bin`) into `backups/` for 100% brick-proof local recovery.
 - **Dedicated `calibration/` Folder**: Automatically extracts your stick's unique cellular IMEI and radio calibration partitions (`modemst1`, `modemst2`, `fsg`, `fsc`, `persist`, `sec`) into the top-level `calibration/` directory. Also accepts user-provided partition dumps (`.bin` or `.img`).
 - **Instant In-Place Calibration Injection (< 0.1s)**: Reads GPT offsets directly from the downloaded universal Linux image and writes your unique calibration data directly into the raw image on disk without slow multi-gigabyte file duplication.
@@ -42,7 +42,7 @@ cd openstick-installer
 flowchart TD
     A["Launch run.command / run.bat / run.sh"] --> B["Select Board:\n[1] UZ801  |  [2] Other"]
     B -->|"[2] Other"| C["Prompt to open GitHub Issue\n& Exit"]
-    B -->|"[1] UZ801"| D["Automatic Reboot to EDL Mode\n(via 'adb reboot edl' or hardware button)"]
+    B -->|"[1] UZ801"| D["Automatic Transition to EDL Mode\n(via fastboot oem reboot-edl, adb, or SSH)"]
     D --> E{"Backup Original Partitions?"}
     E -->|"Yes (Recommended)"| F["Full dump -> backups/uz801_<ts>/full_emmc.bin\n+ Slices calibration sidecars -> calibration/*.bin"]
     E -->|"Skip"| G["Use existing calibration/*.bin"]

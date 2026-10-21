@@ -32,29 +32,113 @@ from openstick.ui import (
 )
 from openstick import adb
 from openstick import edl
+from openstick import fastboot
 from openstick import network
 from openstick import releases
 
 
 def ensure_device_in_edl(device: DeviceModel, dry_run: bool = False) -> bool:
-    """Ensure the device is connected in Qualcomm 9008 EDL mode."""
+    """
+    Ensure the device is connected in Qualcomm 9008 EDL mode.
+    Attempts all non-invasive software reboot mechanisms before proposing
+    the user use the physical hardware recovery button or short EDL pins:
+      1. Qualcomm 9008 EDL mode check (already in EDL)
+      2. Fastboot mode check ('fastboot oem reboot-edl')
+      3. ADB mode check ('adb reboot edl' or 'adb reboot bootloader' -> 'fastboot oem reboot-edl')
+      4. OpenStick Linux SSH check (reboot to bootloader via SSH -> Fastboot -> EDL)
+    """
     if dry_run or edl.is_edl_connected():
         print("[+] Device is already in Qualcomm 9008 EDL mode.")
         return True
 
-    if not adb.is_adb_available():
-        print("[-] 'adb' command was not found in your system PATH.", file=sys.stderr)
-        print("    If your stick is in Android, please install ADB or enter EDL via the physical button.", file=sys.stderr)
+    def attempt_software_reboot() -> bool:
+        """Scan all software interfaces and attempt to transition device to EDL mode."""
+        # 1. Direct EDL check
+        if edl.is_edl_connected():
+            print("[+] Qualcomm 9008 EDL device detected!")
+            return True
 
-    adb_dev = adb.wait_for_device(timeout=5)
-    while not adb_dev and not edl.is_edl_connected():
+        # 2. Fastboot mode check
+        fb_devices = fastboot.get_fastboot_devices()
+        if fb_devices:
+            fb_dev = fb_devices[0]
+            print(f"[+] Found Fastboot device: {fb_dev.serial}")
+            print("[*] Transitioning device to Qualcomm EDL mode (9008) via 'fastboot oem reboot-edl'...")
+            if fastboot.reboot_to_edl(fb_dev.serial, dry_run=dry_run):
+                if edl.wait_for_edl(timeout=30, dry_run=dry_run):
+                    return True
+                print("[-] Fastboot reboot command sent, but EDL device was not detected within timeout.")
+            else:
+                print("[-] Failed to issue reboot command via Fastboot.")
+
+        # 3. ADB mode check
+        adb_devices = [d for d in adb.get_adb_devices() if d.is_ready]
+        if adb_devices:
+            adb_dev = adb_devices[0]
+            print(f"[+] Found ADB device: {adb_dev.serial} (State: {adb_dev.state})")
+            print("[*] Preparing root privileges on device...")
+            adb.prepare_root(adb_dev.serial)
+
+            print("[*] Attempting reboot to Qualcomm EDL mode (9008) via 'adb reboot edl'...")
+            adb.reboot_to_edl(adb_dev.serial, dry_run=dry_run)
+            if edl.wait_for_edl(timeout=10, dry_run=dry_run):
+                return True
+
+            # If not in EDL, check if device rebooted into Fastboot mode
+            fb_dev = fastboot.wait_for_device(timeout=8)
+            if fb_dev:
+                print(f"[+] Device entered Fastboot mode ({fb_dev.serial}).")
+                print("[*] Transitioning to Qualcomm EDL mode via 'fastboot oem reboot-edl'...")
+                if fastboot.reboot_to_edl(fb_dev.serial, dry_run=dry_run):
+                    if edl.wait_for_edl(timeout=30, dry_run=dry_run):
+                        return True
+
+            # If still not in EDL or Fastboot, try explicit adb reboot bootloader
+            print("[*] Trying 'adb reboot bootloader'...")
+            adb.reboot_to_bootloader(adb_dev.serial, dry_run=dry_run)
+            fb_dev = fastboot.wait_for_device(timeout=15)
+            if fb_dev:
+                print(f"[+] Device entered Fastboot mode ({fb_dev.serial}).")
+                print("[*] Transitioning to Qualcomm EDL mode via 'fastboot oem reboot-edl'...")
+                if fastboot.reboot_to_edl(fb_dev.serial, dry_run=dry_run):
+                    if edl.wait_for_edl(timeout=30, dry_run=dry_run):
+                        return True
+
+        # 4. OpenStick Linux (SSH) check
         stick = network.find_stick_device(dry_run=dry_run)
         if stick:
             ip, banner = stick
             print(f"[+] Found OpenStick running Linux at {ip} ({banner})")
-            print("    To enter EDL mode: Unplug the stick, hold down the physical recovery button, and plug into USB.")
-        else:
-            show_adb_guidance(device)
+            print("[*] Attempting soft-reboot to Fastboot/EDL via SSH ('sudo systemctl reboot bootloader')...")
+            if network.reboot_stick_to_bootloader(ip, dry_run=dry_run):
+                print("[*] Reboot command issued. Waiting for Fastboot mode...")
+                start_wait = time.time()
+                while time.time() - start_wait < 20:
+                    if edl.is_edl_connected():
+                        print("[+] Qualcomm 9008 EDL device detected directly!")
+                        return True
+                    fb_dev = fastboot.wait_for_device(timeout=2)
+                    if fb_dev:
+                        print(f"[+] Device entered Fastboot mode ({fb_dev.serial})!")
+                        print("[*] Transitioning to Qualcomm EDL mode via 'fastboot oem reboot-edl'...")
+                        if fastboot.reboot_to_edl(fb_dev.serial, dry_run=dry_run):
+                            if edl.wait_for_edl(timeout=30, dry_run=dry_run):
+                                return True
+                        break
+                    time.sleep(1)
+            else:
+                print("[-] Could not automatically authenticate via SSH with default credentials.")
+                print(f"    You can run in another terminal: ssh user@{ip} and type: sudo systemctl reboot bootloader")
+
+        return False
+
+    # Attempt automatic software discovery and reboot before prompting hardware methods
+    if attempt_software_reboot():
+        return True
+
+    # Software reboot was not successful or no supported device found: prompt the user
+    while not edl.is_edl_connected():
+        show_adb_guidance(device)
         try:
             retry = input("Press [Enter] to scan again, or 'q' to cancel: ").strip().lower()
             if retry in ("q", "quit", "cancel"):
@@ -63,28 +147,10 @@ def ensure_device_in_edl(device: DeviceModel, dry_run: bool = False) -> bool:
             print("\nAborted.")
             return False
 
-        if edl.is_edl_connected():
-            print("[+] Qualcomm 9008 EDL device detected!")
+        if attempt_software_reboot():
             return True
 
-        adb_dev = adb.wait_for_device(timeout=5)
-
-    if edl.is_edl_connected():
-        return True
-
-    if adb_dev:
-        print(f"[+] Found ADB device: {adb_dev.serial} (State: {adb_dev.state})")
-        print("[*] Preparing root privileges on device...")
-        adb.prepare_root(adb_dev.serial)
-
-        print("[*] Rebooting device into Qualcomm EDL mode (9008)...")
-        if not adb.reboot_to_edl(adb_dev.serial, dry_run=dry_run):
-            print("[-] Failed to issue reboot command via ADB.", file=sys.stderr)
-            return False
-
-        return edl.wait_for_edl(timeout=30, dry_run=dry_run)
-
-    return False
+    return edl.is_edl_connected()
 
 
 def handle_partition_backup(device: DeviceModel, dry_run: bool = False) -> Tuple[bool, Optional[Path]]:
