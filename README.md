@@ -44,7 +44,7 @@ flowchart TD
     B -->|"[2] Other"| C["Prompt to open GitHub Issue\n& Exit"]
     B -->|"[1] UZ801"| D["Automatic Transition to EDL Mode\n(via fastboot oem reboot-edl, adb, or SSH)"]
     D --> E{"Backup Original Partitions?"}
-    E -->|"Yes (Recommended)"| F["Full dump -> backups/uz801_<ts>/full_emmc.bin\n+ Slices calibration sidecars -> calibration/*.bin"]
+    E -->|"Yes (Recommended)"| F["Full dump -> backups/uz801_<ts>_<imei>/full_emmc.bin\n+ Slices calibration sidecars -> calibration/*.bin"]
     E -->|"Skip"| G["Use existing calibration/*.bin"]
     F --> H["Propose Next Action:\n[1] Install Linux (Debian) [Recommended]\n[2] Restore Stock Backup\n[3] Exit"]
     G --> H
@@ -63,7 +63,7 @@ openstick-installer/
 ├── run.sh                   # Linux launcher (auto-attaches terminal emulator)
 ├── main.py                  # CLI entry point
 ├── requirements.txt         # Dependencies
-├── backups/                 # Full raw eMMC dumps (backups/uz801_<timestamp>/full_emmc.bin)
+├── backups/                 # Full raw eMMC dumps (backups/uz801_<timestamp>_<imei>/full_emmc.bin)
 ├── calibration/             # Dedicated folder for unique device calibration files (*.bin or *.img)
 │   └── README.md
 ├── loaders/                 # Qualcomm Firehose programmers (prog_emmc_firehose_8916.mbn)

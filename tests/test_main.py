@@ -7,7 +7,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from main import main, handle_sanitize_image, ensure_device_in_edl
+from main import (
+    main,
+    handle_sanitize_image,
+    ensure_device_in_edl,
+    handle_partition_backup,
+    get_last_detected_imei,
+    set_last_detected_imei,
+)
 from openstick.devices import get_device_by_id
 from openstick.fastboot import FastbootDevice
 from openstick.adb import AdbDevice
@@ -112,6 +119,44 @@ class TestMain(unittest.TestCase):
         self.assertTrue(ensure_device_in_edl(device, dry_run=False))
         mock_ssh_reboot.assert_called_once_with("192.168.5.1", dry_run=False)
         mock_fb_reboot.assert_called_once_with("fb_from_ssh", dry_run=False)
+
+    def test_handle_partition_backup_creates_imei_folder_and_metadata(self):
+        device = get_device_by_id("uz801")
+        with patch("main.PROJECT_ROOT", self.test_dir):
+            success, backup_dir = handle_partition_backup(
+                device,
+                dry_run=True,
+                detected_imei="860123456789014",
+            )
+            self.assertTrue(success)
+            self.assertIsNotNone(backup_dir)
+            self.assertTrue(backup_dir.name.startswith("uz801_"))
+            self.assertTrue(backup_dir.name.endswith("_860123456789014"))
+
+            # Verify backup_info.json sidecar was created
+            info_file = backup_dir / "backup_info.json"
+            self.assertTrue(info_file.exists())
+            import json
+            data = json.loads(info_file.read_text())
+            self.assertEqual(data["imei"], "860123456789014")
+            self.assertEqual(data["device_id"], "uz801")
+
+    @patch("openstick.edl.is_edl_connected", return_value=False)
+    @patch("openstick.fastboot.get_fastboot_devices", return_value=[])
+    @patch("openstick.adb.get_adb_devices")
+    @patch("openstick.adb.prepare_root")
+    @patch("openstick.adb.get_device_imei", return_value="867530901234565")
+    @patch("openstick.adb.reboot_to_edl")
+    @patch("openstick.edl.wait_for_edl", return_value=True)
+    def test_ensure_device_in_edl_captures_adb_imei(
+        self, mock_wait_edl, mock_adb_reboot, mock_get_imei, mock_root, mock_adb_devs, mock_fb_devs, mock_is_edl
+    ):
+        mock_adb_devs.return_value = [AdbDevice(serial="adb_serial", state="device")]
+        set_last_detected_imei(None)
+        device = get_device_by_id("uz801")
+        self.assertTrue(ensure_device_in_edl(device, dry_run=False))
+        mock_get_imei.assert_called_once_with("adb_serial", dry_run=False)
+        self.assertEqual(get_last_detected_imei(), "867530901234565")
 
 
 if __name__ == "__main__":

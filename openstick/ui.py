@@ -145,6 +145,8 @@ def show_backup_summary(report: dict, calibration_dir: Optional[Path] = None):
     print("                    BACKUP VERIFICATION SUMMARY")
     print("*" * 65)
     print(f"  • Backup Directory:   {report.get('directory')}")
+    if report.get("imei"):
+        print(f"  • Modem IMEI:         {report.get('imei')}")
     print(f"  • Full eMMC Clone:    {report.get('image_file')} ({report.get('image_size_gb')} GB)")
     print(f"  • Total Partitions:   {report.get('gpt_partitions_count')}")
     if calibration_dir:

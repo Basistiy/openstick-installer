@@ -199,6 +199,25 @@ class TestEdl(unittest.TestCase):
         self.assertIsNotNone(found)
         self.assertEqual(found, new_dir)
 
+    def test_find_latest_valid_backup_with_imei_suffix(self):
+        backups_dir = self.test_dir / "backups"
+        if not backups_dir.exists():
+            backups_dir.mkdir()
+
+        # Older backup without IMEI
+        old_dir = backups_dir / "uz801_20261020_120000"
+        old_dir.mkdir(exist_ok=True)
+        (old_dir / "full_emmc.bin").write_bytes(b"\x01" * 1024)
+
+        # Newer backup with IMEI suffix
+        newer_dir = backups_dir / "uz801_20261022_150000_860123456789014"
+        newer_dir.mkdir(exist_ok=True)
+        (newer_dir / "full_emmc.bin").write_bytes(b"\x01" * 1024)
+
+        found = find_latest_valid_backup(self.test_dir, "uz801")
+        self.assertIsNotNone(found)
+        self.assertEqual(found, newer_dir)
+
     def test_flash_raw_emmc_via_edl_dry_run(self):
         self.assertTrue(flash_raw_emmc_via_edl(self.synthetic_image, dry_run=True))
 

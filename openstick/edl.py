@@ -1,6 +1,7 @@
 """Qualcomm EDL (Emergency Download / 9008 mode) and raw eMMC image engine."""
 
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -925,6 +926,17 @@ def find_latest_valid_backup(
         return None
 
     prefix = f"{device_id.lower()}_"
+
+    def _backup_sort_key(d: Path) -> Tuple[str, float, str]:
+        # Extract embedded timestamp if present: e.g. YYYYMMDD_HHMMSS
+        m = re.search(r"(\d{8}_\d{6})", d.name)
+        ts_str = m.group(1) if m else ""
+        try:
+            mtime = d.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        return (ts_str, mtime, d.name)
+
     candidates = sorted(
         [
             d for d in backups_dir.iterdir()
@@ -932,7 +944,7 @@ def find_latest_valid_backup(
             and d.name.lower().startswith(prefix)
             and "_release_" not in d.name.lower()
         ],
-        key=lambda x: x.name,
+        key=_backup_sort_key,
         reverse=True,
     )
 

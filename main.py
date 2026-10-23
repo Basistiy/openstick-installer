@@ -6,6 +6,7 @@ Cross-platform utility to backup stock partitions and install Linux on MSM8916 U
 
 import argparse
 import datetime
+import json
 import shutil
 import sys
 import time
@@ -35,6 +36,19 @@ from openstick import edl
 from openstick import fastboot
 from openstick import network
 from openstick import releases
+
+_LAST_DETECTED_IMEI: Optional[str] = None
+
+
+def get_last_detected_imei() -> Optional[str]:
+    """Return the modem IMEI detected during the most recent connection check."""
+    return _LAST_DETECTED_IMEI
+
+
+def set_last_detected_imei(imei: Optional[str]) -> None:
+    """Explicitly set or clear the cached modem IMEI."""
+    global _LAST_DETECTED_IMEI
+    _LAST_DETECTED_IMEI = imei
 
 
 def ensure_device_in_edl(device: DeviceModel, dry_run: bool = False) -> bool:
@@ -78,6 +92,12 @@ def ensure_device_in_edl(device: DeviceModel, dry_run: bool = False) -> bool:
             print(f"[+] Found ADB device: {adb_dev.serial} (State: {adb_dev.state})")
             print("[*] Preparing root privileges on device...")
             adb.prepare_root(adb_dev.serial)
+
+            # Query modem IMEI from Stock Android before transitioning to EDL
+            global _LAST_DETECTED_IMEI
+            _LAST_DETECTED_IMEI = adb.get_device_imei(adb_dev.serial, dry_run=dry_run)
+            if _LAST_DETECTED_IMEI:
+                print(f"[+] Detected modem IMEI: {_LAST_DETECTED_IMEI}")
 
             print("[*] Attempting reboot to Qualcomm EDL mode (9008) via 'adb reboot edl'...")
             adb.reboot_to_edl(adb_dev.serial, dry_run=dry_run)
@@ -153,7 +173,11 @@ def ensure_device_in_edl(device: DeviceModel, dry_run: bool = False) -> bool:
     return edl.is_edl_connected()
 
 
-def handle_partition_backup(device: DeviceModel, dry_run: bool = False) -> Tuple[bool, Optional[Path]]:
+def handle_partition_backup(
+    device: DeviceModel,
+    dry_run: bool = False,
+    detected_imei: Optional[str] = None,
+) -> Tuple[bool, Optional[Path]]:
     """Handle ADB reboot to EDL and complete raw eMMC + calibration backup flow."""
     print("\n[*] Initializing partition backup sequence...")
 
@@ -161,14 +185,22 @@ def handle_partition_backup(device: DeviceModel, dry_run: bool = False) -> Tuple
         print("[-] Could not enter Qualcomm 9008 EDL mode for backup.", file=sys.stderr)
         return False, None
 
-    # Prepare timestamped backup directory
+    if detected_imei is None:
+        detected_imei = get_last_detected_imei()
+    if detected_imei is None and dry_run:
+        detected_imei = "860123456789014"
+
+    # Prepare timestamped backup directory (including IMEI if detected)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     backups_root = (PROJECT_ROOT / ".cache" / "dry_run_backups") if dry_run else (PROJECT_ROOT / "backups")
-    backup_dir = backups_root / f"{device.id}_{timestamp}"
+    dir_name = f"{device.id}_{timestamp}_{detected_imei}" if detected_imei else f"{device.id}_{timestamp}"
+    backup_dir = backups_root / dir_name
     calibration_dir = (PROJECT_ROOT / ".cache" / "dry_run_calibration") if dry_run else (PROJECT_ROOT / "calibration")
     loader = edl.resolve_loader(device.recommended_loader)
 
     print(f"[*] Target backup destination: {backup_dir.relative_to(PROJECT_ROOT) if not dry_run else backup_dir}")
+    if detected_imei:
+        print(f"[*] Modem IMEI associated with backup: {detected_imei}")
     if loader:
         print(f"[*] Using Firehose programmer: {loader.name}")
 
@@ -181,10 +213,25 @@ def handle_partition_backup(device: DeviceModel, dry_run: bool = False) -> Tuple
     )
 
     if success:
+        # Write metadata sidecar
+        info = {
+            "device_id": device.id,
+            "device_name": device.name,
+            "timestamp": timestamp,
+            "imei": detected_imei,
+            "created_at": datetime.datetime.now().isoformat(),
+        }
+        try:
+            (backup_dir / "backup_info.json").write_text(json.dumps(info, indent=2))
+        except OSError:
+            pass
+
         is_complete, report = edl.verify_raw_backup(
             backup_dir=backup_dir,
             critical_partitions=device.critical_partitions,
         )
+        if detected_imei:
+            report["imei"] = detected_imei
         show_backup_summary(report, calibration_dir=calibration_dir)
         return is_complete, backup_dir
     else:
