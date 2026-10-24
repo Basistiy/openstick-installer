@@ -38,6 +38,14 @@ The script authors and contributors assume **no responsibility or liability** fo
 
 *Note: You do not need to manually create Python virtual environments or install pip packages; the installer bootstraps `.venv` and all dependencies on first launch.*
 
+> [!NOTE]
+> **Windows Users (EDL USB Driver)**: If Windows attaches a default serial COM port driver to the stick in Qualcomm 9008 EDL mode, Python's `libusb` will throw `NotImplementedError: Operation not supported`. To fix this, bind the generic **WinUSB** (or **libusb-win32**) driver with [Zadig](https://zadig.akeo.ie/):
+> 1. Download and run **Zadig** as Administrator.
+> 2. Go to **Options** -> check **List All Devices**.
+> 3. Select **QUSB_BULK** or **Qualcomm HS-USB QDLoader 9008** (`VID: 05C6, PID: 9008`).
+> 4. Choose **WinUSB** (or **libusb-win32**) and click **Replace Driver**.
+> 5. Unplug and replug the stick, then re-run `run.bat`.
+
 ---
 
 ### Option 2: Clone via Git
@@ -123,6 +131,21 @@ Once the flashing process finishes and the device reboots:
    - Password: `openstick`
    - Stick IP: `192.168.4.1`
    - SSH Command: `ssh user@192.168.4.1`
+
+---
+
+## Troubleshooting
+
+### Windows: `NotImplementedError: Operation not supported or unimplemented on this platform`
+This happens when `edl.py` attempts to connect via PyUSB / `libusb`, but Windows has assigned the default serial driver (`Qualcomm HS-USB QDLoader 9008` / `qcser`) instead of a generic USB driver.
+
+**Fix:**
+1. Download [Zadig](https://zadig.akeo.ie/).
+2. Run `zadig.exe` as Administrator.
+3. Click **Options** -> **List All Devices**.
+4. Select `QUSB_BULK` or `Qualcomm HS-USB QDLoader 9008` (`VID: 05C6, PID: 9008`).
+5. Select **WinUSB** (or **libusb-win32**) in the target driver field and click **Replace Driver**.
+6. Reconnect the stick and re-run `run.bat`.
 
 ---
 

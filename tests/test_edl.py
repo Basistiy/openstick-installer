@@ -236,6 +236,18 @@ class TestEdl(unittest.TestCase):
         reset_cmd = mock_subproc.call_args_list[-1][0][0]
         self.assertNotIn("--memory=eMMC", reset_cmd)
 
+    @patch("openstick.edl.subprocess.run")
+    @patch("openstick.edl.find_edl_runner", return_value=["edl"])
+    def test_run_edl_command_windows_driver_error_handling(self, mock_runner, mock_subproc):
+        mock_subproc.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="raise NotImplementedError(_strerror(ret))\nNotImplementedError: Operation not supported",
+        )
+        with patch("sys.stderr.write") as mock_err_write:
+            ok = run_edl_command(["rf", "full_emmc.bin"])
+            self.assertFalse(ok)
+
 
     def test_clean_rootfs_sensitive_data_dry_run(self):
         ok, items = clean_rootfs_sensitive_data(self.synthetic_image, dry_run=True)

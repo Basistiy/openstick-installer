@@ -278,7 +278,28 @@ def run_edl_command(args: List[str], loader: Optional[Path] = None, dry_run: boo
         return True
     else:
         err_msg = res.stderr.strip() or res.stdout.strip()
-        print(f"[-] EDL command failed: {err_msg}", file=sys.stderr)
+        if (
+            "NotImplementedError" in combined_out
+            or "Operation not supported" in combined_out
+            or "libusb_win32" in combined_out
+        ):
+            print("\n" + "=" * 70, file=sys.stderr)
+            print("[!] WINDOWS USB DRIVER CONFLICT DETECTED (Zadig required)", file=sys.stderr)
+            print("=" * 70, file=sys.stderr)
+            print("PyUSB / libusb cannot communicate directly with the Qualcomm 9008 stick", file=sys.stderr)
+            print("because Windows is using the default Qualcomm serial/COM driver.", file=sys.stderr)
+            print("\nTo fix this in 1 minute:", file=sys.stderr)
+            print("  1. Download Zadig: https://zadig.akeo.ie", file=sys.stderr)
+            print("  2. Open Zadig (Run as Administrator)", file=sys.stderr)
+            print("  3. In top menu, select 'Options' -> check 'List All Devices'", file=sys.stderr)
+            print("  4. In the dropdown, select 'QUSB_BULK' or 'Qualcomm HS-USB QDLoader 9008'", file=sys.stderr)
+            print("     (Verify USB ID: 05C6 9008)", file=sys.stderr)
+            print("  5. In the target driver selector (right of arrow), select 'WinUSB' (or 'libusb-win32')", file=sys.stderr)
+            print("  6. Click 'Replace Driver' (or 'Install Driver')", file=sys.stderr)
+            print("  7. Unplug the stick, plug it back in, and rerun run.bat", file=sys.stderr)
+            print("=" * 70 + "\n", file=sys.stderr)
+        else:
+            print(f"[-] EDL command failed: {err_msg}", file=sys.stderr)
         return False
 
 
