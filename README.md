@@ -27,20 +27,27 @@ The script authors and contributors assume **no responsibility or liability** fo
 
 ## Quick Start (Double-Click Execution)
 
-Clone the repository to your computer:
+### Option 1: Download Pre-Packaged ZIP (Recommended — No Git Needed)
+
+1. Download [**openstick-installer.zip**](https://github.com/Basistiy/openstick-installer/releases/latest/download/openstick-installer.zip) from the [Latest Release](https://github.com/Basistiy/openstick-installer/releases/latest).
+2. Extract the downloaded `.zip` folder.
+3. Launch the installer for your operating system:
+   - **Windows**: Double-click `run.bat`
+   - **macOS**: Double-click `run.command`
+   - **Linux**: Double-click `run.sh` (or `./run.sh` in terminal)
+
+*Note: You do not need to manually create Python virtual environments or install pip packages; the installer bootstraps `.venv` and all dependencies on first launch.*
+
+---
+
+### Option 2: Clone via Git
 
 ```bash
 git clone https://github.com/Basistiy/openstick-installer.git
 cd openstick-installer
 ```
 
-### 1. Launch the Installer
-
-- **Windows**: Double-click `run.bat`
-- **macOS**: Double-click `run.command`
-- **Linux**: Double-click `run.sh` (or execute `./run.sh` in terminal)
-
-*Note: You do not need to manually configure Python virtual environments or install pip packages; the script sets up everything on its first run.*
+Launch the installer using `run.bat` (Windows), `run.command` (macOS), or `./run.sh` (Linux).
 
 ---
 
