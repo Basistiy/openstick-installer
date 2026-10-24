@@ -3,6 +3,7 @@
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
+from openstick import __version__
 from openstick.devices import DeviceModel, get_device_by_id
 
 
@@ -36,13 +37,13 @@ def show_flashing_warning(mode: str = "linux"):
 
 def print_banner():
     """Print welcoming ASCII banner and safety disclaimer."""
-    banner = r"""
+    banner = rf"""
    ___                   ____  _   _      _    
   / _ \ _ __   ___ _ __ / ___|| |_(_) ___| | __
  | | | | '_ \ / _ \ '_ \\___ \| __| |/ __| |/ /
  | |_| | |_) |  __/ | | |___) | |_| | (__|   < 
   \___/| .__/ \___|_| |_|____/ \__|_|\___|_|\_\
-       |_|  MSM8916 Linux Installer v0.1.0
+       |_|  MSM8916 Linux Installer v{__version__}
 =====================================================
 """
     print(banner)

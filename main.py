@@ -18,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from openstick import __version__
 from openstick.bootstrap import ensure_environment
 from openstick.devices import get_device_by_id, DeviceModel
 from openstick.ui import (
@@ -509,6 +510,12 @@ def handle_sanitize_image(image_path_str: str) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="OpenStick MSM8916 Linux Installer")
+    parser.add_argument(
+        "--version",
+        "-v",
+        action="version",
+        version=f"OpenStick Installer v{__version__}",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Simulate execution without modifying hardware")
     parser.add_argument("--skip-bootstrap", action="store_true", help="Skip virtual environment bootstrap check")
     parser.add_argument("--board", "--model", type=str, help="Specify board directly (e.g. uz801)")

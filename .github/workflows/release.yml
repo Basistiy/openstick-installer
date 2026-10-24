@@ -64,6 +64,5 @@ jobs:
           name: "OpenStick Installer ${{ steps.release_info.outputs.tag }}"
           files: |
             dist/openstick-installer.zip
-            dist/openstick-installer-${{ steps.release_info.outputs.tag }}.zip
             dist/SHA256SUMS.txt
           generate_release_notes: true

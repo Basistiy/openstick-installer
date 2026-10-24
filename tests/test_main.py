@@ -15,6 +15,7 @@ from main import (
     get_last_detected_imei,
     set_last_detected_imei,
 )
+from openstick import __version__
 from openstick.devices import get_device_by_id
 from openstick.fastboot import FastbootDevice
 from openstick.adb import AdbDevice
@@ -27,6 +28,15 @@ class TestMain(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    @patch("sys.argv", ["main.py", "--version"])
+    def test_main_version_cli(self):
+        captured = io.StringIO()
+        with patch("sys.stdout", captured), self.assertRaises(SystemExit) as cm:
+            main()
+        self.assertEqual(cm.exception.code, 0)
+        output = captured.getvalue()
+        self.assertIn(f"OpenStick Installer v{__version__}", output)
 
     def test_sanitize_image_cli(self):
         image_path = self.test_dir / "full_emmc.bin"

@@ -149,35 +149,28 @@ def compute_sha256(file_path: Path) -> str:
 
 def build_release_packages(
     repo_root: Path, output_dir: Path, version: str
-) -> Tuple[Path, Path, Path]:
+) -> Tuple[Path, Path]:
     """
-    Build release ZIP archives and SHA256 checksums file.
-    Returns (latest_zip, versioned_zip, sha256_file).
+    Build release ZIP archive and SHA256 checksums file.
+    Returns (installer_zip, sha256_file).
     """
     files = collect_release_files(repo_root)
     validate_release_manifest(files)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Generic 'openstick-installer.zip' (for permanent /latest/download link)
-    latest_zip = output_dir / "openstick-installer.zip"
-    create_zip_archive(files, latest_zip)
+    # Clean release archive 'openstick-installer.zip' (permanent /latest/download link)
+    installer_zip = output_dir / "openstick-installer.zip"
+    create_zip_archive(files, installer_zip)
 
-    # 2. Versioned 'openstick-installer-vX.Y.Z.zip'
-    ver_tag = version if version.startswith("v") else f"v{version}"
-    versioned_zip = output_dir / f"openstick-installer-{ver_tag}.zip"
-    create_zip_archive(files, versioned_zip)
-
-    # 3. SHA256SUMS.txt
+    # SHA256 checksum file
     sha256_file = output_dir / "SHA256SUMS.txt"
-    hash_latest = compute_sha256(latest_zip)
-    hash_versioned = compute_sha256(versioned_zip)
+    hash_installer = compute_sha256(installer_zip)
 
     with open(sha256_file, "w", encoding="utf-8") as f:
-        f.write(f"{hash_latest}  {latest_zip.name}\n")
-        f.write(f"{hash_versioned}  {versioned_zip.name}\n")
+        f.write(f"{hash_installer}  {installer_zip.name}\n")
 
-    return latest_zip, versioned_zip, sha256_file
+    return installer_zip, sha256_file
 
 
 def main():
@@ -210,12 +203,11 @@ def main():
     print(f"[*] Repository root: {repo_root}")
     print(f"[*] Output directory: {output_dir}")
 
-    latest_zip, versioned_zip, sha256_file = build_release_packages(repo_root, output_dir, version)
+    installer_zip, sha256_file = build_release_packages(repo_root, output_dir, version)
 
-    print(f"[+] Created: {latest_zip.name} ({latest_zip.stat().st_size:,} bytes)")
-    print(f"[+] Created: {versioned_zip.name} ({versioned_zip.stat().st_size:,} bytes)")
+    print(f"[+] Created: {installer_zip.name} ({installer_zip.stat().st_size:,} bytes)")
     print(f"[+] Created: {sha256_file.name}")
-    print("\nSHA-256 Checksums:")
+    print("\nSHA-256 Checksum:")
     print(sha256_file.read_text(encoding="utf-8").strip())
 
 

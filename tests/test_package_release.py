@@ -61,16 +61,16 @@ class TestPackageRelease(unittest.TestCase):
     def test_build_release_packages(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             out_dir = Path(tmpdir)
-            latest_zip, versioned_zip, sha256_file = build_release_packages(
+            installer_zip, sha256_file = build_release_packages(
                 self.repo_root, out_dir, "v0.1.0"
             )
 
-            self.assertTrue(latest_zip.is_file())
-            self.assertTrue(versioned_zip.is_file())
+            self.assertTrue(installer_zip.is_file())
+            self.assertEqual(installer_zip.name, "openstick-installer.zip")
             self.assertTrue(sha256_file.is_file())
 
             # Verify contents of generated zip
-            with zipfile.ZipFile(latest_zip, "r") as zf:
+            with zipfile.ZipFile(installer_zip, "r") as zf:
                 namelist = zf.namelist()
                 self.assertIn("run.bat", namelist)
                 self.assertIn("run.command", namelist)
@@ -91,7 +91,6 @@ class TestPackageRelease(unittest.TestCase):
             # Check checksums file
             content = sha256_file.read_text()
             self.assertIn("openstick-installer.zip", content)
-            self.assertIn("openstick-installer-v0.1.0.zip", content)
 
 
 if __name__ == "__main__":
