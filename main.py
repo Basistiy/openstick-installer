@@ -22,6 +22,7 @@ from openstick.bootstrap import ensure_environment
 from openstick.devices import get_device_by_id, DeviceModel
 from openstick.ui import (
     print_banner,
+    show_flashing_warning,
     show_board_menu,
     show_device_info,
     prompt_backup_partitions,
@@ -247,6 +248,7 @@ def handle_linux_install(
     print("\n" + "=" * 65)
     print(f"       INSTALLING OPENSTICK LINUX (DEBIAN) FOR {device.name.split()[0].upper()}")
     print("=" * 65)
+    show_flashing_warning(mode="linux")
 
     calibration_dir = (PROJECT_ROOT / ".cache" / "dry_run_calibration") if dry_run else (PROJECT_ROOT / "calibration")
     loader = edl.resolve_loader(device.recommended_loader)
@@ -346,6 +348,7 @@ def handle_stock_recovery(
     print("\n" + "=" * 65)
     print(f"       RESTORING STOCK FACTORY BACKUP FOR {device.name.split()[0].upper()}")
     print("=" * 65)
+    show_flashing_warning(mode="stock")
 
     loader = edl.resolve_loader(device.recommended_loader)
 

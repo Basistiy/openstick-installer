@@ -6,8 +6,36 @@ from typing import Dict, List, Optional
 from openstick.devices import DeviceModel, get_device_by_id
 
 
+def print_disclaimer():
+    """Display safety disclaimer and liability waiver."""
+    print("=" * 65)
+    print("                    WARNING & DISCLAIMER")
+    print("=" * 65)
+    print("  Flashing Linux or third-party firmware onto your device is a")
+    print("  risky process that carries inherent risks of device bricking,")
+    print("  hardware damage, or permanent data loss.")
+    print("")
+    print("  The script authors and contributors are NOT responsible for")
+    print("  any bricked devices, lost cellular functionality, data loss,")
+    print("  or any other outcomes resulting from the use of this tool.")
+    print("  PROCEED ENTIRELY AT YOUR OWN RISK.")
+    print("=" * 65 + "\n")
+
+
+def show_flashing_warning(mode: str = "linux"):
+    """Display prominent risk warning before flashing firmware."""
+    target = "Linux" if mode == "linux" else "firmware"
+    print("\n" + "!" * 65)
+    print(f" [!] WARNING: Flashing {target} is a risky process that directly")
+    print("     modifies low-level eMMC partitions.")
+    print("     The script authors are NOT responsible for any bricked devices,")
+    print("     loss of IMEI / calibration data, or other adverse outcomes.")
+    print("     Proceed entirely at your own risk.")
+    print("!" * 65 + "\n")
+
+
 def print_banner():
-    """Print welcoming ASCII banner."""
+    """Print welcoming ASCII banner and safety disclaimer."""
     banner = r"""
    ___                   ____  _   _      _    
   / _ \ _ __   ___ _ __ / ___|| |_(_) ___| | __
@@ -18,6 +46,7 @@ def print_banner():
 =====================================================
 """
     print(banner)
+    print_disclaimer()
 
 
 def show_board_menu() -> Optional[DeviceModel]:

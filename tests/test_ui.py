@@ -6,6 +6,9 @@ import unittest
 from unittest.mock import patch
 
 from openstick.ui import (
+    print_banner,
+    print_disclaimer,
+    show_flashing_warning,
     show_board_menu,
     format_size,
     show_action_menu,
@@ -67,6 +70,42 @@ class TestUI(unittest.TestCase):
     def test_show_action_menu_exit(self, _):
         dev = get_device_by_id("uz801")
         self.assertEqual(show_action_menu(dev), "exit")
+
+    def test_print_disclaimer(self):
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            print_disclaimer()
+        output = captured.getvalue()
+        self.assertIn("WARNING & DISCLAIMER", output)
+        self.assertIn("risky process", output)
+        self.assertIn("NOT responsible", output)
+        self.assertIn("outcomes", output)
+
+    def test_show_flashing_warning_linux(self):
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            show_flashing_warning(mode="linux")
+        output = captured.getvalue()
+        self.assertIn("WARNING: Flashing Linux is a risky process", output)
+        self.assertIn("NOT responsible", output)
+        self.assertIn("outcomes", output)
+
+    def test_show_flashing_warning_stock(self):
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            show_flashing_warning(mode="stock")
+        output = captured.getvalue()
+        self.assertIn("WARNING: Flashing firmware is a risky process", output)
+        self.assertIn("NOT responsible", output)
+
+    def test_print_banner_includes_disclaimer(self):
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            print_banner()
+        output = captured.getvalue()
+        self.assertIn("MSM8916 Linux Installer", output)
+        self.assertIn("WARNING & DISCLAIMER", output)
+        self.assertIn("NOT responsible", output)
 
 
 if __name__ == "__main__":

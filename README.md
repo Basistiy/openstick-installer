@@ -17,6 +17,14 @@ Cross-platform, minimal-action installation and flashing tool for the OpenStick 
 
 ---
 
+## ⚠️ Disclaimer & Warning
+
+Flashing Linux or custom firmware onto your device is an inherently risky process that writes directly to low-level eMMC partitions via Qualcomm Emergency Download (9008 EDL) mode. While this installer takes extensive precautions (such as backing up raw partitions and unique cellular calibration data), there is always a risk of hardware damage, lost cellular connectivity, or permanent bricking.
+
+The script authors and contributors assume **no responsibility or liability** for any bricked devices, lost data, hardware damage, or other outcomes resulting from using this software. Proceed entirely at your own risk.
+
+---
+
 ## Quick Start (Double-Click Execution)
 
 Clone the repository to your computer:
