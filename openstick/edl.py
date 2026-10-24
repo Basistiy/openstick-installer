@@ -203,7 +203,7 @@ def run_edl_command(args: List[str], loader: Optional[Path] = None, dry_run: boo
     def _edl_spinner() -> None:
         if stop_event.wait(0.2):
             return
-        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        frames = ["|", "/", "-", "\\"]
         idx = 0
         while not stop_event.is_set():
             elapsed = time.time() - start_time

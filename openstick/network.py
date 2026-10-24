@@ -152,7 +152,7 @@ def wait_for_debian_boot(timeout: int = 60, dry_run: bool = False) -> Optional[s
     """
     if dry_run:
         print("\n[*] [DRY-RUN] Simulating post-flash Debian Linux boot detection...")
-        print("    [✓] OpenStick detected at 192.168.5.1 (SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4)")
+        print("    [+] OpenStick detected at 192.168.5.1 (SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4)")
         return "192.168.5.1"
 
     print("\n[*] Waiting for stick to initialize Debian Linux (monitoring network & SSH)...", end="", flush=True)
@@ -190,10 +190,10 @@ def print_discovery_summary(ip: Optional[str] = None, banner: Optional[str] = No
     print(f"SSH Command: ssh {DEFAULT_SSH_USER}@{target_ip}")
     print(f"Root Access: sudo su (passwordless)")
     print("\nWi-Fi AP Fallback:")
-    print("  • SSID:     Openstick")
-    print("  • Password: openstick")
-    print("  • Stick IP: 192.168.4.1")
-    print(f"  • SSH:      ssh {DEFAULT_SSH_USER}@192.168.4.1 (Password: {DEFAULT_SSH_PASSWORD})")
+    print("  - SSID:     Openstick")
+    print("  - Password: openstick")
+    print("  - Stick IP: 192.168.4.1")
+    print(f"  - SSH:      ssh {DEFAULT_SSH_USER}@192.168.4.1 (Password: {DEFAULT_SSH_PASSWORD})")
     print("=" * 65 + "\n")
 
 

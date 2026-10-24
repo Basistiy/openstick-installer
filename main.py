@@ -469,10 +469,10 @@ def handle_create_release_image(
     print("\n" + "=" * 65)
     print("       RELEASE IMAGE GENERATION COMPLETED SUCCESSFULLY")
     print("=" * 65)
-    print(f"  • Image Archive:  {zip_path.relative_to(PROJECT_ROOT) if not dry_run else zip_path.name} ({format_size(zip_path.stat().st_size) if zip_path.exists() else 'N/A'})")
-    print(f"  • SHA-256 Digest: {digest}")
-    print(f"  • Calibration:    Saved safely in {calibration_dir.relative_to(PROJECT_ROOT) if not dry_run else calibration_dir.name}/")
-    print("  • Includes:       /usr/local/bin/led-test pre-installed")
+    print(f"  - Image Archive:  {zip_path.relative_to(PROJECT_ROOT) if not dry_run else zip_path.name} ({format_size(zip_path.stat().st_size) if zip_path.exists() else 'N/A'})")
+    print(f"  - SHA-256 Digest: {digest}")
+    print(f"  - Calibration:    Saved safely in {calibration_dir.relative_to(PROJECT_ROOT) if not dry_run else calibration_dir.name}/")
+    print("  - Includes:       /usr/local/bin/led-test pre-installed")
     print("=" * 65 + "\n")
     return True
 
