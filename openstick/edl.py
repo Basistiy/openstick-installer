@@ -153,7 +153,10 @@ def resolve_loader(device_loader: Optional[str] = None) -> Optional[Path]:
     """Find appropriate MSM8916 firehose programmer binary if available."""
     loaders_dir = Path(__file__).resolve().parent.parent / "loaders"
     if not loaders_dir.exists():
-        return None
+        try:
+            loaders_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
 
     if device_loader:
         candidate = loaders_dir / device_loader
@@ -163,6 +166,31 @@ def resolve_loader(device_loader: Optional[str] = None) -> Optional[Path]:
     default_loader = loaders_dir / "prog_emmc_firehose_8916.mbn"
     if default_loader.exists():
         return default_loader
+
+    # Fallback: check edl/Loaders/ for MSM8916 compatible loader
+    repo_root = Path(__file__).resolve().parent.parent
+    edl_loaders = repo_root / "edl" / "Loaders"
+    if edl_loaders.is_dir():
+        # Known generic MSM8916 firehose programmer in bkerler/Loaders
+        candidate_paths = [
+            edl_loaders / "lenovo_motorola" / "007050e100000000_99c8c13e374c34d8_fhprg_peek.bin",
+            edl_loaders / "xiaomi" / "prog_emmc_firehose_8916_gucci_peek.mbn",
+        ]
+        for c in candidate_paths:
+            if c.exists():
+                try:
+                    shutil.copy2(c, default_loader)
+                    return default_loader
+                except Exception:
+                    return c
+
+        for c in edl_loaders.rglob("*007050e1*00000000*"):
+            if c.is_file():
+                try:
+                    shutil.copy2(c, default_loader)
+                    return default_loader
+                except Exception:
+                    return c
 
     return None
 

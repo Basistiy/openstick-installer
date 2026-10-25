@@ -188,6 +188,7 @@ backups/*
 calibration/*.bin
 calibration/*.img
 loaders/*.mbn
+!loaders/prog_emmc_firehose_8916.mbn
 loaders/*.elf
 edl/
 *.part

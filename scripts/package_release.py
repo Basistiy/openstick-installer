@@ -63,9 +63,12 @@ def collect_release_files(repo_root: Path) -> Dict[str, Tuple[Path, bool]]:
 
     # 3. Dedicated directories with placeholders / documentation
     # Loaders
-    loaders_readme = repo_root / "loaders" / "README.md"
-    if loaders_readme.is_file():
-        files["loaders/README.md"] = (loaders_readme, False)
+    loaders_dir = repo_root / "loaders"
+    if loaders_dir.is_dir():
+        for path in sorted(loaders_dir.iterdir()):
+            if path.is_file() and path.suffix.lower() in (".mbn", ".elf", ".md"):
+                rel_path = path.relative_to(repo_root).as_posix()
+                files[rel_path] = (path, False)
 
     # Calibration folder
     calib_readme = repo_root / "calibration" / "README.md"

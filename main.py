@@ -199,6 +199,11 @@ def handle_partition_backup(
     backup_dir = backups_root / dir_name
     calibration_dir = (PROJECT_ROOT / ".cache" / "dry_run_calibration") if dry_run else (PROJECT_ROOT / "calibration")
     loader = edl.resolve_loader(device.recommended_loader)
+    if not loader and not dry_run:
+        print("\n[-] Error: Qualcomm Firehose programmer (loader) not found!", file=sys.stderr)
+        print("    MSM8916 EDL operations require 'prog_emmc_firehose_8916.mbn' in the 'loaders/' folder.", file=sys.stderr)
+        print("    Please ensure 'loaders/prog_emmc_firehose_8916.mbn' exists and retry.\n", file=sys.stderr)
+        return False, None
 
     print(f"[*] Target backup destination: {backup_dir.relative_to(PROJECT_ROOT) if not dry_run else backup_dir}")
     if detected_imei:
@@ -253,6 +258,11 @@ def handle_linux_install(
 
     calibration_dir = (PROJECT_ROOT / ".cache" / "dry_run_calibration") if dry_run else (PROJECT_ROOT / "calibration")
     loader = edl.resolve_loader(device.recommended_loader)
+    if not loader and not dry_run:
+        print("\n[-] Error: Qualcomm Firehose programmer (loader) not found!", file=sys.stderr)
+        print("    MSM8916 EDL operations require 'prog_emmc_firehose_8916.mbn' in the 'loaders/' folder.", file=sys.stderr)
+        print("    Please ensure 'loaders/prog_emmc_firehose_8916.mbn' exists and retry.\n", file=sys.stderr)
+        return False
 
     # 1. Safety check: ensure calibration files exist
     if not edl.has_valid_calibration(calibration_dir, device.critical_partitions) and not dry_run:
@@ -352,6 +362,11 @@ def handle_stock_recovery(
     show_flashing_warning(mode="stock")
 
     loader = edl.resolve_loader(device.recommended_loader)
+    if not loader and not dry_run:
+        print("\n[-] Error: Qualcomm Firehose programmer (loader) not found!", file=sys.stderr)
+        print("    MSM8916 EDL operations require 'prog_emmc_firehose_8916.mbn' in the 'loaders/' folder.", file=sys.stderr)
+        print("    Please ensure 'loaders/prog_emmc_firehose_8916.mbn' exists and retry.\n", file=sys.stderr)
+        return False
 
     # 1. Locate latest backup with full_emmc.bin
     backup_dir = edl.find_latest_valid_backup(PROJECT_ROOT, device.id, require_stock=True)
@@ -403,6 +418,11 @@ def handle_create_release_image(
     backup_dir = (PROJECT_ROOT / ".cache" / "dry_run_backups" / f"{device.id}_release_{timestamp}") if dry_run else (PROJECT_ROOT / "backups" / f"{device.id}_release_{timestamp}")
     calibration_dir = (PROJECT_ROOT / ".cache" / "dry_run_calibration") if dry_run else (PROJECT_ROOT / "calibration")
     loader = edl.resolve_loader(device.recommended_loader)
+    if not loader and not dry_run:
+        print("\n[-] Error: Qualcomm Firehose programmer (loader) not found!", file=sys.stderr)
+        print("    MSM8916 EDL operations require 'prog_emmc_firehose_8916.mbn' in the 'loaders/' folder.", file=sys.stderr)
+        print("    Please ensure 'loaders/prog_emmc_firehose_8916.mbn' exists and retry.\n", file=sys.stderr)
+        return False
 
     print(f"[*] Target backup destination: {backup_dir.name}")
     success = edl.execute_raw_emmc_backup(
