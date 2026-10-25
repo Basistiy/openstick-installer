@@ -57,6 +57,14 @@ jobs:
         run: |
           python scripts/package_release.py --version "${{ steps.release_info.outputs.tag }}"
 
+      - name: Fetch UZ801 Linux Firmware Dump Asset
+        run: |
+          if [ ! -f "dist/openstick-uz801-linux.zip" ]; then
+            echo "[*] Fetching universal UZ801 Debian Linux raw image..."
+            curl -sL "https://github.com/Basistiy/openstick-installer/releases/download/v0.0.1/openstick-uz801-linux.zip" -o dist/openstick-uz801-linux.zip
+          fi
+          cd dist && sha256sum openstick-installer.zip openstick-uz801-linux.zip > SHA256SUMS.txt
+
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
@@ -64,5 +72,6 @@ jobs:
           name: "OpenStick Installer ${{ steps.release_info.outputs.tag }}"
           files: |
             dist/openstick-installer.zip
+            dist/openstick-uz801-linux.zip
             dist/SHA256SUMS.txt
           generate_release_notes: true
