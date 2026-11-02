@@ -428,6 +428,8 @@ def handle_linux_install(
 
     if flash_ok:
         detected_ip = network.wait_for_debian_boot(timeout=60, dry_run=dry_run)
+        if detected_ip:
+            network.ensure_stick_led_test(detected_ip, dry_run=dry_run)
         detected_imei = get_last_detected_imei()
         if detected_ip and not detected_imei:
             print("[*] Querying modem IMEI from Debian Linux over SSH...")

@@ -4,7 +4,9 @@ Locates connected sticks via USB Ethernet (CDC-ECM/RNDIS) and Wi-Fi,
 and identifies active SSH endpoints with default credentials.
 """
 
+import base64
 import os
+from pathlib import Path
 import re
 import shutil
 import socket
@@ -619,6 +621,142 @@ def reboot_stick_to_bootloader(
         return True
     except Exception:
         pass
+
+    return False
+
+
+def run_ssh_command(
+    ip: str,
+    remote_cmd: str,
+    user: str = DEFAULT_SSH_USER,
+    password: str = DEFAULT_SSH_PASSWORD,
+    port: int = DEFAULT_SSH_PORT,
+    timeout: int = 15,
+) -> Tuple[bool, str, str]:
+    """
+    Execute a command on a remote OpenStick Linux system over SSH.
+    Handles password authentication across platforms via sshpass, SSH_ASKPASS, or BatchMode.
+    Returns (success: bool, stdout: str, stderr: str).
+    """
+    ssh_bin = shutil.which("ssh")
+    if not ssh_bin:
+        return False, "", "ssh binary not found"
+
+    ssh_opts = [
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=5",
+        "-o", "LogLevel=ERROR",
+        "-p", str(port),
+    ]
+    target = f"{user}@{ip}"
+
+    # Method 1: sshpass if available
+    sshpass_bin = shutil.which("sshpass")
+    if sshpass_bin:
+        try:
+            res = subprocess.run(
+                [sshpass_bin, "-p", password, ssh_bin] + ssh_opts + [target, remote_cmd],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            return (res.returncode == 0, res.stdout, res.stderr)
+        except Exception as e:
+            return False, "", str(e)
+
+    # Method 2: SSH_ASKPASS on Unix (macOS / Linux)
+    if sys.platform != "win32":
+        askpass_script = None
+        try:
+            with tempfile.NamedTemporaryFile("w", delete=False) as f:
+                f.write(f"#!/bin/sh\necho '{password}'\n")
+                askpass_script = f.name
+            os.chmod(askpass_script, 0o755)
+
+            env = os.environ.copy()
+            env["SSH_ASKPASS"] = askpass_script
+            env["SSH_ASKPASS_REQUIRE"] = "force"
+            env["DISPLAY"] = ":0"
+
+            res = subprocess.run(
+                [ssh_bin] + ssh_opts + [target, remote_cmd],
+                env=env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            return (res.returncode == 0, res.stdout, res.stderr)
+        except Exception as e:
+            return False, "", str(e)
+        finally:
+            if askpass_script and os.path.exists(askpass_script):
+                try:
+                    os.remove(askpass_script)
+                except OSError:
+                    pass
+
+    # Method 3: Direct non-interactive SSH invocation
+    try:
+        res = subprocess.run(
+            [ssh_bin, "-o", "BatchMode=yes"] + ssh_opts + [target, remote_cmd],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return (res.returncode == 0, res.stdout, res.stderr)
+    except Exception as e:
+        return False, "", str(e)
+
+
+def ensure_stick_led_test(
+    ip: str,
+    user: str = DEFAULT_SSH_USER,
+    password: str = DEFAULT_SSH_PASSWORD,
+    port: int = DEFAULT_SSH_PORT,
+    dry_run: bool = False,
+) -> bool:
+    """
+    Ensure /usr/local/bin/led-test is present and executable on the target OpenStick.
+    If missing, injects the script directly from openstick/scripts/led-test over SSH.
+    """
+    if dry_run:
+        print(f"[DRY-RUN] Simulating led-test verification on {ip}...")
+        return True
+
+    repo_root = Path(__file__).resolve().parent.parent
+    local_script = repo_root / "openstick" / "scripts" / "led-test"
+    if not local_script.is_file():
+        return False
+
+    script_bytes = local_script.read_bytes()
+    b64_content = base64.b64encode(script_bytes).decode("ascii")
+
+    remote_cmd = (
+        "if [ ! -x /usr/local/bin/led-test ]; then "
+        f"echo '{b64_content}' | base64 -d | sudo tee /usr/local/bin/led-test >/dev/null "
+        "&& sudo chmod 0755 /usr/local/bin/led-test "
+        "&& sudo chown root:root /usr/local/bin/led-test "
+        "&& echo 'INSTALLED'; "
+        "else echo 'ALREADY_EXISTS'; fi"
+    )
+
+    success, stdout, _ = run_ssh_command(
+        ip=ip,
+        remote_cmd=remote_cmd,
+        user=user,
+        password=password,
+        port=port,
+        timeout=15,
+    )
+
+    if success and "INSTALLED" in stdout:
+        print("[+] Injected /usr/local/bin/led-test onto device over SSH.")
+        return True
+    elif success and "ALREADY_EXISTS" in stdout:
+        return True
 
     return False
 

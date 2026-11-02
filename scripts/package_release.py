@@ -61,6 +61,14 @@ def collect_release_files(repo_root: Path) -> Dict[str, Tuple[Path, bool]]:
             rel_path = path.relative_to(repo_root).as_posix()
             files[rel_path] = (path, False)
 
+        # Helper scripts (e.g., led-test)
+        scripts_dir = openstick_dir / "scripts"
+        if scripts_dir.is_dir():
+            for path in sorted(scripts_dir.iterdir()):
+                if path.is_file() and not path.name.startswith("."):
+                    rel_path = path.relative_to(repo_root).as_posix()
+                    files[rel_path] = (path, True)
+
     # 3. Dedicated directories with placeholders / documentation
     # Loaders
     loaders_dir = repo_root / "loaders"

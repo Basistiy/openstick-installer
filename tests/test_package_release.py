@@ -35,10 +35,12 @@ class TestPackageRelease(unittest.TestCase):
         self.assertIn("requirements.txt", files)
         self.assertIn("openstick/__init__.py", files)
         self.assertIn("openstick/bootstrap.py", files)
+        self.assertIn("openstick/scripts/led-test", files)
 
         # Ensure permissions
         self.assertTrue(files["run.command"][1])  # executable
         self.assertTrue(files["run.sh"][1])       # executable
+        self.assertTrue(files["openstick/scripts/led-test"][1])  # executable
         self.assertFalse(files["run.bat"][1])     # non-executable
 
     def test_validate_release_manifest_clean(self):
@@ -76,6 +78,7 @@ class TestPackageRelease(unittest.TestCase):
                 self.assertIn("run.command", namelist)
                 self.assertIn("run.sh", namelist)
                 self.assertIn("main.py", namelist)
+                self.assertIn("openstick/scripts/led-test", namelist)
                 self.assertIn("backups/", namelist)
                 self.assertIn("calibration/", namelist)
 

@@ -13,6 +13,7 @@ from openstick.network import (
     reboot_stick_to_bootloader,
     parse_imei_from_output,
     get_stick_imei,
+    ensure_stick_led_test,
     print_discovery_summary,
     DEFAULT_CANDIDATE_IPS,
 )
@@ -216,6 +217,21 @@ class TestNetwork(unittest.TestCase):
             )
         output = captured.getvalue()
         self.assertIn("Modem IMEI:  867530901234565", output)
+
+    def test_ensure_stick_led_test_dry_run(self):
+        self.assertTrue(ensure_stick_led_test("192.168.5.1", dry_run=True))
+
+    @patch("openstick.network.run_ssh_command")
+    def test_ensure_stick_led_test_already_exists(self, mock_ssh):
+        mock_ssh.return_value = (True, "ALREADY_EXISTS\n", "")
+        self.assertTrue(ensure_stick_led_test("192.168.5.1"))
+        self.assertTrue(mock_ssh.called)
+
+    @patch("openstick.network.run_ssh_command")
+    def test_ensure_stick_led_test_installs_successfully(self, mock_ssh):
+        mock_ssh.return_value = (True, "INSTALLED\n", "")
+        self.assertTrue(ensure_stick_led_test("192.168.5.1"))
+        self.assertTrue(mock_ssh.called)
 
 
 if __name__ == "__main__":
