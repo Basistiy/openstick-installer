@@ -7,6 +7,7 @@ Cross-platform utility to backup stock partitions and install Linux on MSM8916 U
 import argparse
 import datetime
 import json
+import re
 import shutil
 import sys
 import time
@@ -69,6 +70,8 @@ def ensure_device_in_edl(device: DeviceModel, dry_run: bool = False) -> bool:
 
     def attempt_software_reboot() -> bool:
         """Scan all software interfaces and attempt to transition device to EDL mode."""
+        global _LAST_DETECTED_IMEI
+
         # 1. Direct EDL check
         if edl.is_edl_connected():
             print("[+] Qualcomm 9008 EDL device detected!")
@@ -92,12 +95,18 @@ def ensure_device_in_edl(device: DeviceModel, dry_run: bool = False) -> bool:
         if adb_devices:
             adb_dev = adb_devices[0]
             print(f"[+] Found ADB device: {adb_dev.serial} (State: {adb_dev.state})")
+
+            # Query modem IMEI before prepare_root() as well: on ro.secure=1 boards (e.g. HMUF),
+            # unprivileged shell can already read 'dumpsys iphonesubinfo', whereas restarting adbd
+            # briefly drops the USB FunctionFS / TCP ADB transport.
+            _LAST_DETECTED_IMEI = adb.get_device_imei(adb_dev.serial, dry_run=dry_run)
+
             print("[*] Preparing root privileges on device...")
             adb.prepare_root(adb_dev.serial)
 
-            # Query modem IMEI from Stock Android before transitioning to EDL
-            global _LAST_DETECTED_IMEI
-            _LAST_DETECTED_IMEI = adb.get_device_imei(adb_dev.serial, dry_run=dry_run)
+            # Retry IMEI query after root elevation if unprivileged query returned None
+            if not _LAST_DETECTED_IMEI:
+                _LAST_DETECTED_IMEI = adb.get_device_imei(adb_dev.serial, dry_run=dry_run)
             if _LAST_DETECTED_IMEI:
                 print(f"[+] Detected modem IMEI: {_LAST_DETECTED_IMEI}")
 
@@ -131,6 +140,10 @@ def ensure_device_in_edl(device: DeviceModel, dry_run: bool = False) -> bool:
         if stick:
             ip, banner = stick
             print(f"[+] Found OpenStick running Linux at {ip} ({banner})")
+            if not _LAST_DETECTED_IMEI:
+                _LAST_DETECTED_IMEI = network.get_stick_imei(ip, wait_seconds=4, dry_run=dry_run)
+                if _LAST_DETECTED_IMEI:
+                    print(f"[+] Detected modem IMEI: {_LAST_DETECTED_IMEI}")
             print("[*] Attempting soft-reboot to Fastboot/EDL via SSH ('sudo systemctl reboot bootloader')...")
             if network.reboot_stick_to_bootloader(ip, dry_run=dry_run):
                 print("[*] Reboot command issued. Waiting for Fastboot mode...")
@@ -246,9 +259,78 @@ def handle_partition_backup(
         return False, None
 
 
+def _backup_matches_calibration(backup_dir: Path, calibration_dir: Path) -> bool:
+    """
+    Verify that a backup directory belongs to the exact stick whose active calibration
+    is staged in calibration_dir by comparing modemst1.bin byte-for-byte.
+    """
+    active_modemst1 = calibration_dir / "modemst1.bin"
+    if not active_modemst1.is_file() or active_modemst1.stat().st_size == 0:
+        return False
+
+    backup_modemst1 = backup_dir / "calibration" / "modemst1.bin"
+    if not backup_modemst1.is_file():
+        backup_modemst1 = backup_dir / "modemst1.bin"
+    if not backup_modemst1.is_file() or backup_modemst1.stat().st_size == 0:
+        return False
+
+    try:
+        return backup_modemst1.read_bytes() == active_modemst1.read_bytes()
+    except OSError:
+        return False
+
+
+def backfill_backup_imei(backup_dir: Path, imei: str) -> Optional[Path]:
+    """
+    Retroactively attach a newly discovered modem IMEI to an existing backup directory
+    created without one (e.g. when EDL mode was entered via hardware reset pin / Fastboot).
+    Updates backup_info.json and appends _<imei> to the folder name if missing.
+    """
+    if not backup_dir or not backup_dir.is_dir() or not adb.validate_imei(imei):
+        return None
+
+    clean_imei = imei.strip()
+    info_path = backup_dir / "backup_info.json"
+    info: dict = {}
+    if info_path.is_file():
+        try:
+            loaded = json.loads(info_path.read_text())
+            if isinstance(loaded, dict):
+                info = loaded
+        except (OSError, ValueError):
+            info = {}
+
+    existing_imei = info.get("imei")
+    if isinstance(existing_imei, str) and adb.validate_imei(existing_imei):
+        return backup_dir
+
+    m_suffix = re.search(r"_([0-9]{14,15})$", backup_dir.name)
+    if m_suffix and adb.validate_imei(m_suffix.group(1)) and m_suffix.group(1) != clean_imei:
+        return backup_dir
+
+    info["imei"] = clean_imei
+    try:
+        info_path.write_text(json.dumps(info, indent=2))
+    except OSError:
+        pass
+
+    target_dir = backup_dir
+    if not m_suffix:
+        candidate_dir = backup_dir.parent / f"{backup_dir.name}_{clean_imei}"
+        if not candidate_dir.exists():
+            try:
+                backup_dir.rename(candidate_dir)
+                target_dir = candidate_dir
+            except OSError:
+                target_dir = backup_dir
+
+    return target_dir
+
+
 def handle_linux_install(
     device: DeviceModel,
     dry_run: bool = False,
+    backup_dir: Optional[Path] = None,
 ) -> bool:
     """Download general-purpose Linux image, inject calibration, and flash via EDL."""
     print("\n" + "=" * 65)
@@ -346,7 +428,31 @@ def handle_linux_install(
 
     if flash_ok:
         detected_ip = network.wait_for_debian_boot(timeout=60, dry_run=dry_run)
-        show_post_install_info("linux", detected_ip=detected_ip)
+        detected_imei = get_last_detected_imei()
+        if detected_ip and not detected_imei:
+            print("[*] Querying modem IMEI from Debian Linux over SSH...")
+            detected_imei = network.get_stick_imei(detected_ip, wait_seconds=16, dry_run=dry_run)
+            if detected_imei:
+                set_last_detected_imei(detected_imei)
+                print(f"[+] Detected modem IMEI: {detected_imei}")
+
+        if detected_imei:
+            target_backup = backup_dir
+            if target_backup is None and not dry_run:
+                candidate = edl.find_latest_valid_backup(PROJECT_ROOT, device.id)
+                if candidate and _backup_matches_calibration(candidate, calibration_dir):
+                    target_backup = candidate
+            if target_backup and target_backup.is_dir():
+                prev_name = target_backup.name
+                updated_dir = backfill_backup_imei(target_backup, detected_imei)
+                if updated_dir and updated_dir.name != prev_name:
+                    try:
+                        rel_path = updated_dir.relative_to(PROJECT_ROOT)
+                    except ValueError:
+                        rel_path = updated_dir
+                    print(f"[+] Updated backup metadata and folder with IMEI: {rel_path}")
+
+        show_post_install_info("linux", detected_ip=detected_ip, detected_imei=detected_imei)
         return True
     return False
 
@@ -554,6 +660,7 @@ def main():
         ensure_environment(project_root=PROJECT_ROOT, dry_run=args.dry_run)
 
     print_banner()
+    set_last_detected_imei(None)
 
     # Create release image CLI flag
     if args.create_release:
@@ -571,7 +678,8 @@ def main():
         result = network.find_stick_device(dry_run=args.dry_run)
         if result:
             ip, banner = result
-            network.print_discovery_summary(ip=ip, banner=banner)
+            imei = network.get_stick_imei(ip, wait_seconds=4, dry_run=args.dry_run)
+            network.print_discovery_summary(ip=ip, banner=banner, imei=imei)
         else:
             network.print_discovery_summary(ip=None)
         return
@@ -591,6 +699,7 @@ def main():
     show_device_info(device)
 
     # Step 2: Stock Partition Backup
+    backup_dir: Optional[Path] = None
     do_backup = prompt_backup_partitions()
     if do_backup:
         backup_ok, backup_dir = handle_partition_backup(device, dry_run=args.dry_run)
@@ -612,7 +721,7 @@ def main():
     # Step 3: Action Selection (Install Linux vs. Restore Stock Backup vs. Create Release vs. Exit)
     action = show_action_menu(device)
     if action == "linux":
-        handle_linux_install(device, dry_run=args.dry_run)
+        handle_linux_install(device, dry_run=args.dry_run, backup_dir=backup_dir)
     elif action == "stock":
         handle_stock_recovery(device, dry_run=args.dry_run)
     elif action == "release":

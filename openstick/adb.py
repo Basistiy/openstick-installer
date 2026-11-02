@@ -61,19 +61,65 @@ def get_adb_devices() -> List[AdbDevice]:
     return devices
 
 
+def _is_adb_root(cmd_prefix: List[str]) -> bool:
+    """Return True if the current ADB shell session runs with uid=0 (root)."""
+    try:
+        res = subprocess.run(
+            cmd_prefix + ["shell", "id"],
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+        return res.returncode == 0 and "uid=0" in (res.stdout or "")
+    except Exception:
+        return False
+
+
+def _reconnect_tcp_adb_if_needed(serial: Optional[str]) -> None:
+    """Reconnect TCP ADB endpoint (ip:port) after an adbd restart drops the socket."""
+    if not serial or ":" not in serial:
+        return
+    time.sleep(1.5)
+    try:
+        subprocess.run(
+            ["adb", "connect", serial],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
 def prepare_root(serial: Optional[str] = None) -> bool:
-    """Attempt to enable ADB root mode on stock MSM8916 firmware."""
+    """
+    Attempt to enable ADB root mode on stock MSM8916 firmware.
+    Avoids unnecessary adbd restarts when already root (e.g. UZ801 ro.secure=0),
+    and waits for USB FunctionFS re-enumeration when adbd restarts (e.g. HMUF ro.secure=1).
+    """
     cmd_prefix = ["adb"]
     if serial:
         cmd_prefix.extend(["-s", serial])
 
-    # First attempt: standard adb root
+    # Already running as root (ro.secure=0) — no adbd restart needed
+    if _is_adb_root(cmd_prefix):
+        return True
+
+    # First attempt: standard 'adb root'
     try:
-        subprocess.run(cmd_prefix + ["root"], capture_output=True, text=True, timeout=5)
+        res = subprocess.run(cmd_prefix + ["root"], capture_output=True, text=True, timeout=5)
+        combined = ((res.stdout or "") + "\n" + (res.stderr or "")).lower()
+        if "already running as root" in combined:
+            return True
+        if "cannot run as root" not in combined:
+            _reconnect_tcp_adb_if_needed(serial)
+            wait_for_device(timeout=8, serial=serial)
+            if _is_adb_root(cmd_prefix):
+                return True
     except Exception:
         pass
 
-    # Second attempt: setprop service.adb.root 1 and restart adbd
+    # Second attempt: setprop service.adb.root 1 and restart adbd manually
     try:
         subprocess.run(
             cmd_prefix + ["shell", "setprop service.adb.root 1"],
@@ -87,7 +133,9 @@ def prepare_root(serial: Optional[str] = None) -> bool:
             text=True,
             timeout=5,
         )
-        time.sleep(2)
+        _reconnect_tcp_adb_if_needed(serial)
+        if wait_for_device(timeout=8, serial=serial) is None:
+            time.sleep(2)
         return True
     except Exception:
         return False
@@ -131,15 +179,19 @@ def reboot_to_bootloader(serial: Optional[str] = None, dry_run: bool = False) ->
         return False
 
 
-def wait_for_device(timeout: int = 20) -> Optional[AdbDevice]:
+def wait_for_device(timeout: int = 20, serial: Optional[str] = None) -> Optional[AdbDevice]:
     """Poll for a connected and authorized ADB device within timeout seconds."""
     start = time.time()
     while time.time() - start < timeout:
         devices = get_adb_devices()
         ready_devices = [d for d in devices if d.is_ready]
-        if ready_devices:
+        if serial:
+            for d in ready_devices:
+                if d.serial == serial:
+                    return d
+        elif ready_devices:
             return ready_devices[0]
-        time.sleep(1)
+        time.sleep(0.5)
     return None
 
 
@@ -209,25 +261,26 @@ def get_device_imei(serial: Optional[str] = None, dry_run: bool = False) -> Opti
         except Exception:
             pass
 
-    # 2. Check dumpsys iphonesubinfo
-    try:
-        res = subprocess.run(
-            cmd_prefix + ["shell", "dumpsys iphonesubinfo"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if res.returncode == 0 and res.stdout:
-            labeled = re.findall(r"(?:Device ID|IMEI)\s*(?:=|:)\s*([0-9]{14,15})", res.stdout, re.IGNORECASE)
-            for cand in labeled:
-                if validate_imei(cand):
-                    return cand
-            all_digits = re.findall(r"\b([0-9]{14,15})\b", res.stdout)
-            for cand in all_digits:
-                if validate_imei(cand):
-                    return cand
-    except Exception:
-        pass
+    # 2. Check dumpsys iphonesubinfo (works even as unprivileged shell on Android 4.4+)
+    for svc_name in ("iphonesubinfo", "iphonesubinfo_msim"):
+        try:
+            res = subprocess.run(
+                cmd_prefix + ["shell", f"dumpsys {svc_name}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if res.returncode == 0 and res.stdout:
+                labeled = re.findall(r"(?:Device ID|IMEI)\s*(?:=|:)\s*([0-9]{14,15})", res.stdout, re.IGNORECASE)
+                for cand in labeled:
+                    if validate_imei(cand):
+                        return cand
+                all_digits = re.findall(r"\b([0-9]{14,15})\b", res.stdout)
+                for cand in all_digits:
+                    if validate_imei(cand):
+                        return cand
+        except Exception:
+            pass
 
     # 3. Check service call iphonesubinfo 1
     try:
@@ -252,6 +305,7 @@ def get_device_imei(serial: Optional[str] = None, dry_run: bool = False) -> Opti
         pass
 
     # 4. Check direct modem AT command on Qualcomm smd ports
+    # Note: Android 4.4 toolbox lacks 'timeout', so spawn background reader before sending AT+CGSN.
     for port in ["/dev/smd11", "/dev/smd0", "/dev/smd7"]:
         try:
             check_port = subprocess.run(
@@ -263,12 +317,18 @@ def get_device_imei(serial: Optional[str] = None, dry_run: bool = False) -> Opti
             if "yes" not in check_port.stdout.lower():
                 continue
 
-            at_cmd = f"echo -e 'AT+CGSN\\r' > {port} 2>/dev/null && timeout 1 cat {port} 2>/dev/null || true"
+            at_cmd = (
+                f"(cat {port} & pid=$!; "
+                f"sleep 0.2 2>/dev/null || sleep 1; "
+                f"printf 'AT+CGSN\\r' > {port}; "
+                f"sleep 1; "
+                f"kill $pid 2>/dev/null) 2>/dev/null || true"
+            )
             res = subprocess.run(
                 cmd_prefix + ["shell", at_cmd],
                 capture_output=True,
                 text=True,
-                timeout=3,
+                timeout=4,
             )
             candidates = re.findall(r"\b([0-9]{14,15})\b", res.stdout)
             for cand in candidates:

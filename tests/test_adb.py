@@ -77,6 +77,42 @@ class TestAdb(unittest.TestCase):
         self.assertIsNotNone(res)
         self.assertEqual(res.serial, "test_serial")
 
+    @patch("openstick.adb.get_adb_devices")
+    def test_wait_for_device_filters_by_serial(self, mock_get):
+        other_dev = AdbDevice(serial="other_serial", state="device")
+        target_dev = AdbDevice(serial="target_serial", state="device")
+        mock_get.return_value = [other_dev, target_dev]
+
+        res = wait_for_device(timeout=1, serial="target_serial")
+        self.assertIsNotNone(res)
+        self.assertEqual(res.serial, "target_serial")
+
+    @patch("openstick.adb.subprocess.run")
+    def test_prepare_root_already_root_skips_restart(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="uid=0(root) gid=0(root)\n")
+
+        self.assertTrue(prepare_root(serial="uz801_serial"))
+        mock_run.assert_called_once_with(
+            ["adb", "-s", "uz801_serial", "shell", "id"],
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+
+    @patch("openstick.adb.wait_for_device")
+    @patch("openstick.adb.subprocess.run")
+    def test_prepare_root_restarts_adbd_and_waits_for_reenumeration(self, mock_run, mock_wait):
+        mock_wait.return_value = AdbDevice(serial="hmuf_serial", state="device")
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="uid=2000(shell) gid=2000(shell)\n", stderr=""),
+            MagicMock(returncode=0, stdout="restarting adbd as root\n", stderr=""),
+            MagicMock(returncode=0, stdout="uid=0(root) gid=0(root)\n", stderr=""),
+        ]
+
+        self.assertTrue(prepare_root(serial="hmuf_serial"))
+        mock_wait.assert_called_once_with(timeout=8, serial="hmuf_serial")
+        self.assertEqual(mock_run.call_count, 3)
+
     def test_validate_imei(self):
         # Valid 15-digit Luhn IMEI
         self.assertTrue(validate_imei("860123456789014"))
@@ -124,6 +160,29 @@ class TestAdb(unittest.TestCase):
 
         imei = get_device_imei(serial="serial123")
         self.assertEqual(imei, "867530901234565")
+
+    @patch("openstick.adb.subprocess.run")
+    def test_get_device_imei_from_at_smd_without_timeout(self, mock_run):
+        executed_cmds = []
+
+        def fake_run(cmd, **kwargs):
+            cmd_str = " ".join(cmd)
+            executed_cmds.append(cmd_str)
+            if "getprop" in cmd_str or "dumpsys" in cmd_str or "service call" in cmd_str:
+                return MagicMock(returncode=0, stdout="\n")
+            if "[ -e /dev/smd11 ]" in cmd_str:
+                return MagicMock(returncode=0, stdout="yes\n")
+            if "AT+CGSN" in cmd_str:
+                return MagicMock(returncode=0, stdout="AT+CGSN\r\n867530901234565\r\n\r\nOK\r\n")
+            return MagicMock(returncode=0, stdout="")
+
+        mock_run.side_effect = fake_run
+
+        imei = get_device_imei(serial="hmuf_serial")
+        self.assertEqual(imei, "867530901234565")
+        at_invocations = [c for c in executed_cmds if "AT+CGSN" in c]
+        self.assertEqual(len(at_invocations), 1)
+        self.assertNotIn("timeout ", at_invocations[0])
 
     @patch("openstick.adb.subprocess.run")
     def test_get_device_imei_not_found(self, mock_run):

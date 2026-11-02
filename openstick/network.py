@@ -14,6 +14,8 @@ import tempfile
 import time
 from typing import List, Optional, Set, Tuple
 
+from openstick.adb import validate_imei
+
 DEFAULT_CANDIDATE_IPS = [
     "192.168.5.1",    # OpenStick Debian default USB CDC-ECM gateway
     "192.168.68.1",   # OpenStick Debian alternative RNDIS gateway
@@ -296,7 +298,11 @@ def wait_for_debian_boot(timeout: int = 60, dry_run: bool = False) -> Optional[s
     return None
 
 
-def print_discovery_summary(ip: Optional[str] = None, banner: Optional[str] = None):
+def print_discovery_summary(
+    ip: Optional[str] = None,
+    banner: Optional[str] = None,
+    imei: Optional[str] = None,
+):
     """Print an interactive connection card with verified device details."""
     target_ip = ip or "192.168.5.1"
     status_label = "[+] OPENSTICK DEVICE DETECTED & VERIFIED" if ip else "[!] DEFAULT CONNECTION DETAILS"
@@ -307,6 +313,8 @@ def print_discovery_summary(ip: Optional[str] = None, banner: Optional[str] = No
     if banner:
         print(f"Service:     {banner}")
     print(f"Device IP:   {target_ip}")
+    if imei:
+        print(f"Modem IMEI:  {imei}")
     print(f"Username:    {DEFAULT_SSH_USER}")
     print(f"Password:    {DEFAULT_SSH_PASSWORD}")
     print(f"SSH Command: ssh {DEFAULT_SSH_USER}@{target_ip}")
@@ -317,6 +325,169 @@ def print_discovery_summary(ip: Optional[str] = None, banner: Optional[str] = No
     print("  - Stick IP: 192.168.4.1")
     print(f"  - SSH:      ssh {DEFAULT_SSH_USER}@192.168.4.1 (Password: {DEFAULT_SSH_PASSWORD})")
     print("=" * 65 + "\n")
+
+
+def parse_imei_from_output(output: Optional[str]) -> Optional[str]:
+    """
+    Extract and validate a 14 or 15-digit modem IMEI from mmcli, qmicli, or AT+CGSN output.
+    """
+    if not output:
+        return None
+
+    labeled_patterns = [
+        r"modem\.generic\.equipment-identifier\s*:\s*([0-9]{14,15})",
+        r"modem\.3gpp\.imei\s*:\s*([0-9]{14,15})",
+        r"(?:equipment\s*id|imei)\s*(?:=|:)\s*['\"]?([0-9]{14,15})['\"]?",
+    ]
+    for pat in labeled_patterns:
+        for cand in re.findall(pat, output, re.IGNORECASE):
+            if validate_imei(cand):
+                return cand
+
+    # Unlabeled fallback (e.g. raw AT+CGSN response): require 15-digit Luhn-valid IMEI
+    for cand in re.findall(r"\b([0-9]{15})\b", output):
+        if validate_imei(cand):
+            return cand
+
+    return None
+
+
+def _has_ssh_transport_error(result: subprocess.CompletedProcess) -> bool:
+    """Return True if SSH failed due to an unreachable network endpoint."""
+    stderr_text = result.stderr.lower() if isinstance(result.stderr, str) else ""
+    transport_markers = (
+        "connection refused",
+        "no route to host",
+        "network is unreachable",
+        "timed out",
+        "could not resolve",
+    )
+    return any(marker in stderr_text for marker in transport_markers)
+
+
+def get_stick_imei(
+    ip: str,
+    user: str = DEFAULT_SSH_USER,
+    password: str = DEFAULT_SSH_PASSWORD,
+    port: int = DEFAULT_SSH_PORT,
+    wait_seconds: int = 16,
+    dry_run: bool = False,
+) -> Optional[str]:
+    """
+    Query the cellular modem IMEI from a booted OpenStick Debian system over SSH.
+    Polls ModemManager (mmcli) inside a single SSH session so post-flash queries succeed
+    even while the MSM8916 baseband remoteproc is still registering after boot, with
+    fallbacks to qmicli and direct AT+CGSN on wwan/smd ports.
+    """
+    if dry_run:
+        return "860123456789014"
+
+    ssh_bin = shutil.which("ssh")
+    if not ssh_bin:
+        return None
+
+    attempts = max(1, (max(0, wait_seconds) + 1) // 2)
+    remote_cmd = (
+        f"i=0; "
+        f"while [ \"$i\" -lt {attempts} ]; do "
+        "out=$(mmcli -m any -K 2>/dev/null || mmcli -m 0 -K 2>/dev/null || mmcli -m 0 2>/dev/null || true); "
+        "if printf '%s\\n' \"$out\" | grep -qiE '(equipment-identifier|equipment id|imei)[^0-9]*[0-9]{14,15}'; then "
+        "printf '%s\\n' \"$out\"; exit 0; "
+        "fi; "
+        "if command -v qmicli >/dev/null 2>&1; then "
+        "for qdev in /dev/wwan0qmi0 /dev/cdc-wdm0; do "
+        "if [ -e \"$qdev\" ]; then "
+        "qout=$(sudo qmicli -d \"$qdev\" -p --dms-get-ids 2>/dev/null || sudo qmicli -d \"$qdev\" --dms-get-ids 2>/dev/null || true); "
+        "if printf '%s\\n' \"$qout\" | grep -qiE 'imei[^0-9]*[0-9]{14,15}'; then "
+        "printf '%s\\n' \"$qout\"; exit 0; "
+        "fi; fi; done; fi; "
+        "i=$((i + 1)); "
+        f"[ \"$i\" -lt {attempts} ] && sleep 2; "
+        "done; "
+        "for atdev in /dev/wwan0at0 /dev/ttyMSM0 /dev/smd11 /dev/smd0; do "
+        "if [ -e \"$atdev\" ]; then "
+        "atout=$(sudo sh -c \"(cat '$atdev' & pid=\\$!; sleep 0.2 2>/dev/null || sleep 1; printf 'AT+CGSN\\r' > '$atdev'; sleep 1; kill \\$pid 2>/dev/null)\" 2>/dev/null || true); "
+        "if printf '%s\\n' \"$atout\" | grep -qE '[0-9]{14,15}'; then "
+        "printf '%s\\n' \"$atout\"; exit 0; "
+        "fi; fi; done"
+    )
+
+    ssh_opts = [
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=5",
+        "-o", "LogLevel=ERROR",
+        "-p", str(port),
+    ]
+    target = f"{user}@{ip}"
+    cmd_timeout = max(12, attempts * 2 + 8)
+
+    # Method 1: sshpass if available
+    sshpass_bin = shutil.which("sshpass")
+    if sshpass_bin:
+        try:
+            res = subprocess.run(
+                [sshpass_bin, "-p", password, ssh_bin] + ssh_opts + [target, remote_cmd],
+                capture_output=True,
+                text=True,
+                timeout=cmd_timeout,
+            )
+            imei = parse_imei_from_output(res.stdout)
+            if imei:
+                return imei
+            if _has_ssh_transport_error(res):
+                return None
+        except Exception:
+            pass
+
+    # Method 2: SSH_ASKPASS on Unix (macOS / Linux)
+    if sys.platform != "win32":
+        askpass_script = None
+        try:
+            with tempfile.NamedTemporaryFile("w", delete=False) as f:
+                f.write(f"#!/bin/sh\necho '{password}'\n")
+                askpass_script = f.name
+            os.chmod(askpass_script, 0o755)
+
+            env = os.environ.copy()
+            env["SSH_ASKPASS"] = askpass_script
+            env["SSH_ASKPASS_REQUIRE"] = "force"
+            env["DISPLAY"] = ":0"
+
+            res = subprocess.run(
+                [ssh_bin] + ssh_opts + [target, remote_cmd],
+                env=env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=cmd_timeout,
+            )
+            imei = parse_imei_from_output(res.stdout)
+            if imei:
+                return imei
+            if res.returncode == 0 or _has_ssh_transport_error(res):
+                return None
+        except Exception:
+            pass
+        finally:
+            if askpass_script and os.path.exists(askpass_script):
+                try:
+                    os.remove(askpass_script)
+                except OSError:
+                    pass
+
+    # Method 3: Direct non-interactive SSH invocation (SSH keys / passwordless)
+    try:
+        res = subprocess.run(
+            [ssh_bin, "-o", "BatchMode=yes"] + ssh_opts + [target, remote_cmd],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=cmd_timeout,
+        )
+        return parse_imei_from_output(res.stdout)
+    except Exception:
+        return None
 
 
 def _did_ssh_reboot_succeed(result: subprocess.CompletedProcess) -> bool:

@@ -231,14 +231,21 @@ def show_action_menu(device: DeviceModel) -> str:
             sys.exit(1)
 
 
-def show_post_install_info(mode: str, detected_ip: Optional[str] = None):
+def show_post_install_info(
+    mode: str,
+    detected_ip: Optional[str] = None,
+    detected_imei: Optional[str] = None,
+):
     """Display connection instructions after flashing completes."""
     print("\n" + "=" * 65)
     if mode == "linux":
         if detected_ip:
             print("          CONGRATULATIONS! DEBIAN LINUX IS READY")
             print("=" * 65)
-            print(f"The stick is online and responding at: {detected_ip}\n")
+            print(f"The stick is online and responding at: {detected_ip}")
+            if detected_imei:
+                print(f"Modem IMEI: {detected_imei}")
+            print("")
             print("How to connect:")
             print("  1. USB Network Adapter (Active & Verified):")
             print(f"     - Stick IP: {detected_ip}")

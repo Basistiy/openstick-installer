@@ -1,6 +1,7 @@
 """Integration tests for main CLI workflows."""
 
 import io
+import json
 import shutil
 import tempfile
 import unittest
@@ -12,6 +13,8 @@ from main import (
     handle_sanitize_image,
     ensure_device_in_edl,
     handle_partition_backup,
+    handle_linux_install,
+    backfill_backup_imei,
     get_last_detected_imei,
     set_last_detected_imei,
 )
@@ -60,6 +63,7 @@ class TestMain(unittest.TestCase):
         output = captured.getvalue()
         self.assertIn("OPENSTICK DEVICE DETECTED & VERIFIED", output)
         self.assertIn("192.168.5.1", output)
+        self.assertIn("Modem IMEI:  860123456789014", output)
 
     @patch("sys.argv", ["main.py", "--board", "uz801", "--dry-run"])
     @patch("builtins.input", side_effect=["y", "1"])
@@ -97,13 +101,23 @@ class TestMain(unittest.TestCase):
     @patch("openstick.edl.is_edl_connected", return_value=False)
     @patch("openstick.fastboot.get_fastboot_devices", return_value=[])
     @patch("openstick.adb.get_adb_devices")
+    @patch("openstick.adb.get_device_imei", return_value=None)
     @patch("openstick.adb.prepare_root")
     @patch("openstick.adb.reboot_to_edl")
     @patch("openstick.fastboot.wait_for_device")
     @patch("openstick.fastboot.reboot_to_edl", return_value=True)
     @patch("openstick.edl.wait_for_edl", side_effect=[False, True])
     def test_ensure_device_in_edl_via_adb_fastboot_chain(
-        self, mock_wait_edl, mock_fb_reboot, mock_wait_fb, mock_adb_reboot, mock_root, mock_adb_devs, mock_fb_devs, mock_is_edl
+        self,
+        mock_wait_edl,
+        mock_fb_reboot,
+        mock_wait_fb,
+        mock_adb_reboot,
+        mock_root,
+        mock_get_imei,
+        mock_adb_devs,
+        mock_fb_devs,
+        mock_is_edl,
     ):
         mock_adb_devs.return_value = [AdbDevice(serial="adb_serial", state="device")]
         mock_wait_fb.return_value = FastbootDevice(serial="fb_serial", state="fastboot")
@@ -116,17 +130,30 @@ class TestMain(unittest.TestCase):
     @patch("openstick.fastboot.get_fastboot_devices", return_value=[])
     @patch("openstick.adb.get_adb_devices", return_value=[])
     @patch("openstick.network.find_stick_device")
+    @patch("openstick.network.get_stick_imei", return_value="867530901234565")
     @patch("openstick.network.reboot_stick_to_bootloader", return_value=True)
     @patch("openstick.fastboot.wait_for_device")
     @patch("openstick.fastboot.reboot_to_edl", return_value=True)
     @patch("openstick.edl.wait_for_edl", return_value=True)
     def test_ensure_device_in_edl_via_linux_ssh(
-        self, mock_wait_edl, mock_fb_reboot, mock_wait_fb, mock_ssh_reboot, mock_find, mock_adb_devs, mock_fb_devs, mock_is_edl
+        self,
+        mock_wait_edl,
+        mock_fb_reboot,
+        mock_wait_fb,
+        mock_ssh_reboot,
+        mock_get_stick_imei,
+        mock_find,
+        mock_adb_devs,
+        mock_fb_devs,
+        mock_is_edl,
     ):
         mock_find.return_value = ("192.168.5.1", "SSH-2.0-OpenSSH")
         mock_wait_fb.return_value = FastbootDevice(serial="fb_from_ssh", state="fastboot")
+        set_last_detected_imei(None)
         device = get_device_by_id("uz801")
         self.assertTrue(ensure_device_in_edl(device, dry_run=False))
+        mock_get_stick_imei.assert_called_once_with("192.168.5.1", wait_seconds=4, dry_run=False)
+        self.assertEqual(get_last_detected_imei(), "867530901234565")
         mock_ssh_reboot.assert_called_once_with("192.168.5.1", dry_run=False)
         mock_fb_reboot.assert_called_once_with("fb_from_ssh", dry_run=False)
 
@@ -167,6 +194,138 @@ class TestMain(unittest.TestCase):
         self.assertTrue(ensure_device_in_edl(device, dry_run=False))
         mock_get_imei.assert_called_once_with("adb_serial", dry_run=False)
         self.assertEqual(get_last_detected_imei(), "867530901234565")
+
+    @patch("openstick.edl.is_edl_connected", return_value=False)
+    @patch("openstick.fastboot.get_fastboot_devices", return_value=[])
+    @patch("openstick.adb.get_adb_devices")
+    @patch("openstick.adb.prepare_root")
+    @patch("openstick.adb.get_device_imei", side_effect=[None, "867530901234565"])
+    @patch("openstick.adb.reboot_to_edl")
+    @patch("openstick.edl.wait_for_edl", return_value=True)
+    def test_ensure_device_in_edl_retries_adb_imei_after_prepare_root(
+        self, mock_wait_edl, mock_adb_reboot, mock_get_imei, mock_root, mock_adb_devs, mock_fb_devs, mock_is_edl
+    ):
+        mock_adb_devs.return_value = [AdbDevice(serial="hmuf_serial", state="device")]
+        set_last_detected_imei(None)
+        device = get_device_by_id("uz801")
+        self.assertTrue(ensure_device_in_edl(device, dry_run=False))
+        self.assertEqual(mock_get_imei.call_count, 2)
+        mock_root.assert_called_once_with("hmuf_serial")
+        self.assertEqual(get_last_detected_imei(), "867530901234565")
+
+    def test_backfill_backup_imei_updates_metadata_and_renames_folder(self):
+        backup_dir = self.test_dir / "backups" / "uz801_20261102_130237"
+        backup_dir.mkdir(parents=True)
+        info_file = backup_dir / "backup_info.json"
+        info_file.write_text(json.dumps({
+            "device_id": "uz801",
+            "timestamp": "20261102_130237",
+            "imei": None,
+        }, indent=2))
+
+        updated_dir = backfill_backup_imei(backup_dir, "867530901234565")
+        self.assertIsNotNone(updated_dir)
+        self.assertEqual(updated_dir.name, "uz801_20261102_130237_867530901234565")
+        self.assertTrue(updated_dir.exists())
+        self.assertFalse(backup_dir.exists())
+
+        updated_info = json.loads((updated_dir / "backup_info.json").read_text())
+        self.assertEqual(updated_info["imei"], "867530901234565")
+
+        # Must never overwrite an already-populated valid IMEI
+        unchanged = backfill_backup_imei(updated_dir, "860123456789014")
+        self.assertEqual(unchanged, updated_dir)
+        self.assertEqual(
+            json.loads((updated_dir / "backup_info.json").read_text())["imei"],
+            "867530901234565",
+        )
+
+    def _prepare_mock_install_workspace(self, modemst1_tag: bytes = b"STICK_A_MODEMST1"):
+        """Set up synthetic calibration, loader, extracted release image, and unlabeled backup."""
+        calib_dir = self.test_dir / "calibration"
+        calib_dir.mkdir(parents=True, exist_ok=True)
+        for part in ("modemst1", "modemst2", "fsg", "fsc", "persist", "sec"):
+            content = modemst1_tag if part == "modemst1" else f"DATA_{part}".encode("ascii")
+            (calib_dir / f"{part}.bin").write_bytes(content)
+
+        extracted_dir = self.test_dir / "extracted_release"
+        extracted_dir.mkdir(parents=True, exist_ok=True)
+        raw_img = extracted_dir / "full_emmc.bin"
+        create_synthetic_raw_image(raw_img)
+
+        backup_dir = self.test_dir / "backups" / "uz801_20261102_130237"
+        (backup_dir / "calibration").mkdir(parents=True, exist_ok=True)
+        create_synthetic_raw_image(backup_dir / "full_emmc.bin")
+        for part in ("modemst1", "modemst2", "fsg", "fsc", "persist", "sec"):
+            content = modemst1_tag if part == "modemst1" else f"DATA_{part}".encode("ascii")
+            (backup_dir / "calibration" / f"{part}.bin").write_bytes(content)
+        (backup_dir / "backup_info.json").write_text(json.dumps({
+            "device_id": "uz801",
+            "timestamp": "20261102_130237",
+            "imei": None,
+        }))
+
+        loader_path = self.test_dir / "prog_emmc_firehose_8916.mbn"
+        loader_path.write_bytes(b"LOADER")
+        return calib_dir, extracted_dir, backup_dir, loader_path
+
+    def test_handle_linux_install_queries_ssh_imei_and_backfills_reset_pin_backup(self):
+        _, extracted_dir, backup_dir, loader_path = self._prepare_mock_install_workspace()
+        device = get_device_by_id("uz801")
+        set_last_detected_imei(None)
+
+        release_payload = {
+            "tag_name": "v0.0.2",
+            "assets": [{"name": "openstick-uz801-linux.zip", "browser_download_url": "mock://", "size": 100}],
+        }
+        captured = io.StringIO()
+        with patch("main.PROJECT_ROOT", self.test_dir), \
+             patch("openstick.edl.resolve_loader", return_value=loader_path), \
+             patch("openstick.releases.get_latest_release", return_value=release_payload), \
+             patch("openstick.releases.download_and_extract_asset", return_value=(True, extracted_dir)), \
+             patch("openstick.edl.is_edl_connected", return_value=True), \
+             patch("openstick.edl.flash_raw_emmc_via_edl", return_value=True), \
+             patch("openstick.network.wait_for_debian_boot", return_value="192.168.5.1"), \
+             patch("openstick.network.get_stick_imei", return_value="867530901234565") as mock_ssh_imei, \
+             patch("sys.stdout", captured):
+            ok = handle_linux_install(device, dry_run=False, backup_dir=backup_dir)
+
+        self.assertTrue(ok)
+        mock_ssh_imei.assert_called_once_with("192.168.5.1", wait_seconds=16, dry_run=False)
+        renamed_dir = self.test_dir / "backups" / "uz801_20261102_130237_867530901234565"
+        self.assertTrue(renamed_dir.is_dir())
+        info = json.loads((renamed_dir / "backup_info.json").read_text())
+        self.assertEqual(info["imei"], "867530901234565")
+        self.assertIn("Modem IMEI: 867530901234565", captured.getvalue())
+
+    def test_handle_linux_install_cross_run_backfill_requires_matching_calibration(self):
+        calib_dir, extracted_dir, backup_dir, loader_path = self._prepare_mock_install_workspace(
+            modemst1_tag=b"STICK_A_MODEMST1"
+        )
+        # Overwrite active calibration modemst1.bin to simulate a different physical stick
+        (calib_dir / "modemst1.bin").write_bytes(b"DIFFERENT_STICK_B_MODEMST1")
+
+        device = get_device_by_id("uz801")
+        set_last_detected_imei(None)
+        release_payload = {
+            "tag_name": "v0.0.2",
+            "assets": [{"name": "openstick-uz801-linux.zip", "browser_download_url": "mock://", "size": 100}],
+        }
+        with patch("main.PROJECT_ROOT", self.test_dir), \
+             patch("openstick.edl.resolve_loader", return_value=loader_path), \
+             patch("openstick.releases.get_latest_release", return_value=release_payload), \
+             patch("openstick.releases.download_and_extract_asset", return_value=(True, extracted_dir)), \
+             patch("openstick.edl.is_edl_connected", return_value=True), \
+             patch("openstick.edl.flash_raw_emmc_via_edl", return_value=True), \
+             patch("openstick.network.wait_for_debian_boot", return_value="192.168.5.1"), \
+             patch("openstick.network.get_stick_imei", return_value="867530901234565"), \
+             patch("sys.stdout", io.StringIO()):
+            ok = handle_linux_install(device, dry_run=False, backup_dir=None)
+
+        self.assertTrue(ok)
+        # Backup from Stick A must remain untouched when Stick B is flashed
+        self.assertTrue(backup_dir.is_dir())
+        self.assertIsNone(json.loads((backup_dir / "backup_info.json").read_text())["imei"])
 
 
 if __name__ == "__main__":

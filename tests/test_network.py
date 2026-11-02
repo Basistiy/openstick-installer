@@ -1,5 +1,6 @@
 """Tests for network discovery and SSH verification."""
 
+import io
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -10,6 +11,9 @@ from openstick.network import (
     probe_ssh_endpoint,
     wait_for_debian_boot,
     reboot_stick_to_bootloader,
+    parse_imei_from_output,
+    get_stick_imei,
+    print_discovery_summary,
     DEFAULT_CANDIDATE_IPS,
 )
 
@@ -153,6 +157,65 @@ class TestNetwork(unittest.TestCase):
         )
 
         self.assertFalse(reboot_stick_to_bootloader("192.168.1.1"))
+
+    def test_parse_imei_from_output(self):
+        mmcli_kv = (
+            "modem.dbus-path                       : /org/freedesktop/ModemManager1/Modem/0\n"
+            "modem.generic.equipment-identifier    : 867530901234565\n"
+            "modem.generic.state                   : enabled\n"
+        )
+        self.assertEqual(parse_imei_from_output(mmcli_kv), "867530901234565")
+
+        mmcli_human = (
+            "  --------------------------------\n"
+            "  Hardware |   manufacturer: QUALCOMM INCORPORATED\n"
+            "           |   equipment id: 860123456789014\n"
+        )
+        self.assertEqual(parse_imei_from_output(mmcli_human), "860123456789014")
+
+        qmicli_out = "[/dev/wwan0qmi0] Device IDs retrieved:\n\tIMEI: '867530901234565'\n"
+        self.assertEqual(parse_imei_from_output(qmicli_out), "867530901234565")
+
+        at_out = "AT+CGSN\r\n860123456789014\r\n\r\nOK\r\n"
+        self.assertEqual(parse_imei_from_output(at_out), "860123456789014")
+
+        # Reject invalid Luhn or uniform dummy values
+        self.assertIsNone(parse_imei_from_output("modem.generic.equipment-identifier : 000000000000000"))
+        self.assertIsNone(parse_imei_from_output("modem.generic.equipment-identifier : 860123456789015"))
+        self.assertIsNone(parse_imei_from_output(""))
+
+    def test_get_stick_imei_dry_run(self):
+        self.assertEqual(get_stick_imei("192.168.5.1", dry_run=True), "860123456789014")
+
+    @patch("openstick.network.shutil.which")
+    @patch("openstick.network.subprocess.run")
+    def test_get_stick_imei_via_ssh(self, mock_run, mock_which):
+        def fake_which(cmd):
+            if cmd == "ssh":
+                return "/usr/bin/ssh"
+            return None
+
+        mock_which.side_effect = fake_which
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="modem.generic.equipment-identifier : 867530901234565\n",
+            stderr="",
+        )
+
+        imei = get_stick_imei("192.168.5.1", wait_seconds=4)
+        self.assertEqual(imei, "867530901234565")
+        self.assertTrue(mock_run.called)
+
+    def test_print_discovery_summary_includes_imei(self):
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            print_discovery_summary(
+                ip="192.168.5.1",
+                banner="SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4",
+                imei="867530901234565",
+            )
+        output = captured.getvalue()
+        self.assertIn("Modem IMEI:  867530901234565", output)
 
 
 if __name__ == "__main__":
