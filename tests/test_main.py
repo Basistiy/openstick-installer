@@ -76,6 +76,16 @@ class TestMain(unittest.TestCase):
         self.assertIn("BACKUP VERIFICATION SUMMARY", output)
         self.assertIn("INSTALLING OPENSTICK LINUX", output)
 
+    @patch("sys.argv", ["main.py", "--board", "hmuf02", "--dry-run"])
+    @patch("builtins.input", side_effect=["y", "1"])
+    def test_main_hmuf02_board_flow_dry_run(self, mock_input):
+        captured = io.StringIO()
+        with patch("main.PROJECT_ROOT", self.test_dir), patch("sys.stdout", captured):
+            main()
+        output = captured.getvalue()
+        self.assertIn("HMUF02 (4G LTE USB Modem Dongle)", output)
+        self.assertIn("BACKUP VERIFICATION SUMMARY", output)
+        self.assertIn("INSTALLING OPENSTICK LINUX (DEBIAN) FOR HMUF02", output)
 
     @patch("sys.argv", ["main.py", "--board", "uz801", "--create-release", "--dry-run"])
     def test_main_create_release_dry_run(self):
@@ -86,6 +96,18 @@ class TestMain(unittest.TestCase):
         self.assertEqual(cm.exception.code, 0)
         output = captured.getvalue()
         self.assertIn("CREATING SANITIZED RELEASE IMAGE", output)
+        self.assertIn("RELEASE IMAGE GENERATION COMPLETED SUCCESSFULLY", output)
+
+    @patch("sys.argv", ["main.py", "--board", "hmuf02", "--create-release", "--dry-run"])
+    def test_main_hmuf02_create_release_dry_run(self):
+        captured = io.StringIO()
+        with patch("main.PROJECT_ROOT", self.test_dir), patch("sys.stdout", captured):
+            with self.assertRaises(SystemExit) as cm:
+                main()
+        self.assertEqual(cm.exception.code, 0)
+        output = captured.getvalue()
+        self.assertIn("CREATING SANITIZED RELEASE IMAGE FOR HMUF02", output)
+        self.assertIn("openstick-hmuf02-linux.zip", output)
         self.assertIn("RELEASE IMAGE GENERATION COMPLETED SUCCESSFULLY", output)
 
     @patch("openstick.edl.is_edl_connected", return_value=False)
@@ -326,6 +348,45 @@ class TestMain(unittest.TestCase):
         # Backup from Stick A must remain untouched when Stick B is flashed
         self.assertTrue(backup_dir.is_dir())
         self.assertIsNone(json.loads((backup_dir / "backup_info.json").read_text())["imei"])
+
+    def test_handle_linux_install_hmuf02_rejects_uz801_only_release_and_supports_local_dist_fallback(self):
+        import zipfile
+        _, extracted_dir, _, loader_path = self._prepare_mock_install_workspace()
+        device = get_device_by_id("hmuf02")
+        release_uz801_only = {
+            "tag_name": "v0.0.2",
+            "assets": [
+                {"name": "openstick-installer.zip", "browser_download_url": "mock://", "size": 100},
+                {"name": "openstick-uz801-linux.zip", "browser_download_url": "mock://", "size": 100},
+            ],
+        }
+
+        # 1. Without local dist/openstick-hmuf02-linux.zip, must refuse rather than flashing UZ801 image
+        with patch("main.PROJECT_ROOT", self.test_dir), \
+             patch("openstick.edl.resolve_loader", return_value=loader_path), \
+             patch("openstick.releases.get_latest_release", return_value=release_uz801_only), \
+             patch("sys.stdout", io.StringIO()), \
+             patch("sys.stderr", io.StringIO()):
+            self.assertFalse(handle_linux_install(device, dry_run=False))
+
+        # 2. With local dist/openstick-hmuf02-linux.zip present, must extract and flash HMUF02 image
+        dist_dir = self.test_dir / "dist"
+        dist_dir.mkdir(parents=True, exist_ok=True)
+        local_zip = dist_dir / "openstick-hmuf02-linux.zip"
+        with zipfile.ZipFile(local_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(extracted_dir / "full_emmc.bin", arcname="full_emmc.bin")
+
+        with patch("main.PROJECT_ROOT", self.test_dir), \
+             patch("openstick.edl.resolve_loader", return_value=loader_path), \
+             patch("openstick.releases.get_latest_release", return_value=release_uz801_only), \
+             patch("openstick.edl.is_edl_connected", return_value=True), \
+             patch("openstick.edl.flash_raw_emmc_via_edl", return_value=True) as mock_flash, \
+             patch("openstick.network.wait_for_debian_boot", return_value="192.168.5.1"), \
+             patch("openstick.network.ensure_stick_led_test", return_value=True), \
+             patch("openstick.network.get_stick_imei", return_value="868367079149880"), \
+             patch("sys.stdout", io.StringIO()):
+            self.assertTrue(handle_linux_install(device, dry_run=False))
+            mock_flash.assert_called_once()
 
 
 if __name__ == "__main__":

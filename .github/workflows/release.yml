@@ -57,16 +57,56 @@ jobs:
         run: |
           python scripts/package_release.py --version "${{ steps.release_info.outputs.tag }}"
 
-      - name: Fetch and Prepare UZ801 Linux Firmware Dump Asset
+      - name: Fetch and Prepare Linux Firmware Dump Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           sudo apt-get update && sudo apt-get install -y e2fsprogs
-          if [ ! -f "dist/openstick-uz801-linux.zip" ]; then
-            echo "[*] Fetching universal UZ801 Debian Linux raw image..."
-            curl -sL "https://github.com/Basistiy/openstick-installer/releases/download/v0.0.1/openstick-uz801-linux.zip" -o dist/openstick-uz801-linux.zip
-          fi
-          echo "[*] Ensuring /usr/local/bin/led-test is installed in release firmware image..."
-          python scripts/ensure_image_led_test.py dist/openstick-uz801-linux.zip
-          cd dist && sha256sum openstick-installer.zip openstick-uz801-linux.zip > SHA256SUMS.txt
+          for board in uz801 hmuf02; do
+            asset_name="openstick-${board}-linux.zip"
+            dest_path="dist/${asset_name}"
+            if [ ! -f "${dest_path}" ]; then
+              echo "[*] Looking up latest published ${asset_name} across GitHub Releases..."
+              download_url=$(python3 - "${asset_name}" << 'PY'
+          import json, os, sys, urllib.request
+          target = sys.argv[1]
+          repo = os.environ.get("GITHUB_REPOSITORY", "Basistiy/openstick-installer")
+          token = os.environ.get("GH_TOKEN", "")
+          headers = {"Accept": "application/vnd.github+json", "User-Agent": "OpenStickReleaseWorkflow"}
+          if token:
+              headers["Authorization"] = f"Bearer {token}"
+          try:
+              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases", headers=headers)
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  for rel in json.loads(resp.read().decode()):
+                      if rel.get("draft"):
+                          continue
+                      for asset in rel.get("assets", []):
+                          if asset.get("name") == target and asset.get("browser_download_url"):
+                              print(asset["browser_download_url"])
+                              sys.exit(0)
+          except Exception:
+              pass
+          PY
+              )
+              if [ -z "${download_url}" ] && [ "${board}" = "uz801" ]; then
+                download_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v0.0.1/openstick-uz801-linux.zip"
+              fi
+              if [ -n "${download_url}" ]; then
+                echo "[*] Fetching ${asset_name} from ${download_url}..."
+                curl -fSL "${download_url}" -o "${dest_path}" || rm -f "${dest_path}"
+              else
+                echo "[!] No previously published ${asset_name} found on GitHub Releases yet; skipping carry-forward."
+              fi
+            fi
+            if [ -f "${dest_path}" ]; then
+              echo "[*] Ensuring /usr/local/bin/led-test is installed in ${asset_name}..."
+              python scripts/ensure_image_led_test.py "${dest_path}"
+            fi
+          done
+          cd dist
+          shopt -s nullglob
+          sha256sum openstick-installer.zip openstick-*-linux.zip > SHA256SUMS.txt
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
@@ -75,6 +115,6 @@ jobs:
           name: "OpenStick Installer ${{ steps.release_info.outputs.tag }}"
           files: |
             dist/openstick-installer.zip
-            dist/openstick-uz801-linux.zip
+            dist/openstick-*-linux.zip
             dist/SHA256SUMS.txt
           generate_release_notes: true

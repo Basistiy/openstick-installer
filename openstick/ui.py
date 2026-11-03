@@ -4,7 +4,12 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 from openstick import __version__
-from openstick.devices import DeviceModel, get_device_by_id
+from openstick.devices import (
+    DeviceModel,
+    get_device_by_id,
+    get_device_by_index,
+    get_supported_devices,
+)
 
 
 def print_disclaimer():
@@ -52,31 +57,44 @@ def print_banner():
 
 def show_board_menu() -> Optional[DeviceModel]:
     """
-    Display initial board selection menu:
-      [1] UZ801
-      [2] Other
-    Returns DeviceModel for UZ801, or None if Other is selected.
+    Display initial board selection menu for all supported devices plus 'Other board'.
+    Returns selected DeviceModel, or None if 'Other board' is selected.
     """
+    devices = list(get_supported_devices().values())
+    other_idx = len(devices) + 1
+
     print("\n[+] Step 1: Select your target board")
     print("-" * 55)
-    print("  [1] UZ801 (4G LTE USB Modem Dongle - Qualcomm MSM8916)")
-    print("  [2] Other board")
+    for idx, dev in enumerate(devices, start=1):
+        print(f"  [{idx}] {dev.name} - Qualcomm MSM8916")
+    print(f"  [{other_idx}] Other board")
     print("-" * 55)
 
     while True:
         try:
-            choice = input("Please select board [1-2] or 'q' to quit: ").strip().lower()
+            choice = input(f"Please select board [1-{other_idx}] or 'q' to quit: ").strip().lower()
             if choice in ("q", "quit", "exit"):
                 print("Exiting.")
                 sys.exit(0)
 
-            if choice in ("1", "uz801"):
-                return get_device_by_id("uz801")
-            elif choice in ("2", "other"):
+            if choice.isdigit():
+                num = int(choice)
+                if num == other_idx:
+                    show_other_board_message()
+                    return None
+                dev = get_device_by_index(num)
+                if dev is not None:
+                    return dev
+            elif choice == "other":
                 show_other_board_message()
                 return None
+            else:
+                dev = get_device_by_id(choice)
+                if dev is not None:
+                    return dev
 
-            print("[-] Invalid selection. Enter 1 for UZ801 or 2 for Other.")
+            board_hints = ", ".join(f"{i} for {d.id.upper()}" for i, d in enumerate(devices, start=1))
+            print(f"[-] Invalid selection. Enter {board_hints}, or {other_idx} for Other.")
         except (KeyboardInterrupt, EOFError):
             print("\nAborted.")
             sys.exit(1)
@@ -84,16 +102,24 @@ def show_board_menu() -> Optional[DeviceModel]:
 
 def show_other_board_message():
     """Display GitHub issue guidance when user chooses 'Other board'."""
+    board_names = [d.id.upper() for d in get_supported_devices().values()]
+    if len(board_names) > 1:
+        supported_str = ", ".join(board_names[:-1]) + f" and {board_names[-1]} boards"
+    elif board_names:
+        supported_str = f"{board_names[0]} board"
+    else:
+        supported_str = "MSM8916 boards"
+
     print("\n" + "=" * 68)
     print("                     BOARD SUPPORT REQUEST")
     print("=" * 68)
-    print("Currently, OpenStick Installer officially supports the UZ801 board.")
+    print(f"Currently, OpenStick Installer officially supports the {supported_str}.")
     print("We are actively expanding support for additional MSM8916 boards!\n")
     print("Please open a GitHub issue to request support for your board:")
     print("  -> https://github.com/Basistiy/openstick-installer/issues\n")
     print("Helpful details to include in your issue:")
     print("  - Board name / model printed on the casing")
-    print("  - PCB silk markings / revision (e.g. UZ801-V3, SP970, MF70, etc.)")
+    print("  - PCB silk markings / revision (e.g. UZ801-V3, HMUF02-V05, SP970, MF70, etc.)")
     print("  - High-resolution photos of both sides of the board")
     print("=" * 68 + "\n")
 

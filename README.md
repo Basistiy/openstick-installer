@@ -4,6 +4,13 @@ Cross-platform, minimal-action installation and flashing tool for the OpenStick 
 
 ---
 
+## Supported Models
+
+- **UZ801** (`UZ801` / `UZ801-V3`) — Qualcomm MSM8916 4G LTE USB Modem Dongle
+- **HMUF02** (`HMUF02` / `HMUF02-V05`) — Qualcomm MSM8916 4G LTE Wi-Fi USB Modem Dongle
+
+---
+
 ## Features
 
 - **Zero-Fuss Setup**: Automatically initializes a local Python virtual environment (`.venv`) and installs all required dependencies (`pyusb`, `pyserial`, `bkerler/edl`, etc.) with zero user intervention.
@@ -63,13 +70,13 @@ Launch the installer using `run.bat` (Windows), `run.command` (macOS), or `./run
 
 ```mermaid
 flowchart TD
-    A["Launch run.command / run.bat / run.sh"] --> B["Select Board:\n[1] UZ801  |  [2] Other"]
-    B -->|"[2] Other"| C["Prompt to open GitHub Issue\n& Exit"]
-    B -->|"[1] UZ801"| D["Automatic Transition to EDL Mode\n(via fastboot oem reboot-edl, adb, or SSH)"]
+    A["Launch run.command / run.bat / run.sh"] --> B["Select Board:\n[1] UZ801  |  [2] HMUF02  |  [3] Other"]
+    B -->|"[3] Other"| C["Prompt to open GitHub Issue\n& Exit"]
+    B -->|"[1] UZ801 / [2] HMUF02"| D["Automatic Transition to EDL Mode\n(via fastboot oem reboot-edl, adb, or SSH)"]
     D --> E{"Backup Original Partitions?"}
-    E -->|"Yes (Recommended)"| F["Full dump -> backups/uz801_<ts>_<imei>/full_emmc.bin\n+ Slices calibration sidecars -> calibration/*.bin"]
+    E -->|"Yes (Recommended)"| F["Full dump -> backups/<board>_<ts>_<imei>/full_emmc.bin\n+ Slices calibration sidecars -> calibration/*.bin"]
     E -->|"Skip"| G["Use existing calibration/*.bin"]
-    F --> H["Propose Next Action:\n[1] Install Linux (Debian) [Recommended]\n[2] Restore Stock Backup\n[3] Exit"]
+    F --> H["Propose Next Action:\n[1] Install Linux (Debian) [Recommended]\n[2] Restore Stock Backup\n[3] Create Sanitized Release Image\n[4] Exit"]
     G --> H
     H -->|"[1] Install Linux"| I["1. Download universal image from GitHub Releases\n2. Inject calibration/*.bin into raw image in-place\n3. Flash with 'edl wf' & reboot ('edl reset')"]
     I --> J["Stick boots into Debian Linux!\nAuto-detects IP: ssh user@192.168.5.1 (Password: 1)"]
@@ -86,7 +93,7 @@ openstick-installer/
 ├── run.sh                   # Linux launcher (auto-attaches terminal emulator)
 ├── main.py                  # CLI entry point
 ├── requirements.txt         # Dependencies
-├── backups/                 # Full raw eMMC dumps (backups/uz801_<timestamp>_<imei>/full_emmc.bin)
+├── backups/                 # Full raw eMMC dumps (backups/<board>_<timestamp>_<imei>/full_emmc.bin)
 ├── calibration/             # Dedicated folder for unique device calibration files (*.bin or *.img)
 │   └── README.md
 ├── loaders/                 # Qualcomm Firehose programmers (prog_emmc_firehose_8916.mbn)

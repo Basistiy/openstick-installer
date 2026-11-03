@@ -583,6 +583,7 @@ def clean_rootfs_sensitive_data(
         "/home/user/.ssh/authorized_keys",
         "/root/.ssh/authorized_keys",
         "/var/log/wtmp",
+        "/var/log/wtmp.db",
         "/var/log/btmp",
         "/var/log/lastlog",
         "/var/log/auth.log",
@@ -590,32 +591,111 @@ def clean_rootfs_sensitive_data(
         "/var/log/messages",
     ]
 
-    commands = [f"rm {f}" for f in files_to_remove]
+    # Also discover and remove systemd binary journal files (/var/log/journal/<machine-id>/*.journal*)
+    # which can otherwise retain ModemManager IMEI and session logs.
+    try:
+        ls_journal = subprocess.run(
+            [str(debugfs_bin), "-R", "ls -p /var/log/journal", debugfs_target],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        for line in (ls_journal.stdout or "").splitlines():
+            parts = line.strip().strip("/").split("/")
+            if len(parts) >= 5:
+                mode_str, entry_name = parts[1], parts[4]
+                if entry_name in ("", ".", ".."):
+                    continue
+                if mode_str.startswith("04"):
+                    sub_ls = subprocess.run(
+                        [str(debugfs_bin), "-R", f"ls -p /var/log/journal/{entry_name}", debugfs_target],
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                    )
+                    for sub_line in (sub_ls.stdout or "").splitlines():
+                        sub_parts = sub_line.strip().strip("/").split("/")
+                        if len(sub_parts) >= 5:
+                            sub_mode, sub_name = sub_parts[1], sub_parts[4]
+                            if sub_name not in ("", ".", "..") and not sub_mode.startswith("04"):
+                                files_to_remove.append(f"/var/log/journal/{entry_name}/{sub_name}")
+                else:
+                    files_to_remove.append(f"/var/log/journal/{entry_name}")
+    except Exception:
+        pass
+
+    # Step 1: Collect allocated filesystem block numbers of sensitive files before unlinking
+    blocks_to_zero: set = set()
+    block_size = 4096
+    try:
+        stats_res = subprocess.run(
+            [str(debugfs_bin), "-R", "stats", debugfs_target],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        m_bs = re.search(r"Block size:\s+(\d+)", stats_res.stdout or "")
+        if m_bs:
+            block_size = int(m_bs.group(1))
+
+        blocks_query = "\n".join(f"blocks {f}" for f in files_to_remove) + "\n"
+        blk_res = subprocess.run(
+            [str(debugfs_bin), debugfs_target],
+            input=blocks_query,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        for tok in re.findall(r"\b(\d+)\b", blk_res.stdout or ""):
+            bnum = int(tok)
+            if bnum > 0 and (bnum + 1) * block_size <= rootfs_info["byte_size"]:
+                blocks_to_zero.add(bnum)
+    except Exception:
+        blocks_to_zero = set()
+
+    rm_commands = [f"rm {f}" for f in files_to_remove]
     cleaned_items.extend(files_to_remove)
 
-    if inject_led_test:
-        repo_root = Path(__file__).resolve().parent.parent
-        led_test_script = repo_root / "openstick" / "scripts" / "led-test"
-        if led_test_script.exists():
-            commands.extend([
-                "rm /usr/local/bin/led-test",
-                f"write {led_test_script} /usr/local/bin/led-test",
-                "set_inode_field /usr/local/bin/led-test mode 0100755",
-                "set_inode_field /usr/local/bin/led-test uid 0",
-                "set_inode_field /usr/local/bin/led-test gid 0",
-            ])
-            cleaned_items.append("/usr/local/bin/led-test (injected)")
-
-    cmd_script = "\n".join(commands) + "\n"
-
     try:
+        # Step 2: Unlink sensitive files via debugfs first so extent trees free cleanly
         subprocess.run(
             [str(debugfs_bin), "-w", debugfs_target],
-            input=cmd_script,
+            input="\n".join(rm_commands) + "\n",
             capture_output=True,
             text=True,
             timeout=60,
         )
+
+        # Step 3: Overwrite the freed blocks with 0x00 so no deleted log/IMEI bytes remain in free space
+        if blocks_to_zero and block_size >= 1024:
+            zero_blk = b"\x00" * block_size
+            with open(image_path, "r+b") as f:
+                for bnum in sorted(blocks_to_zero):
+                    f.seek(offset + bnum * block_size)
+                    f.write(zero_blk)
+                f.flush()
+
+        # Step 4: Inject /usr/local/bin/led-test after zeroing freed blocks
+        if inject_led_test:
+            repo_root = Path(__file__).resolve().parent.parent
+            led_test_script = repo_root / "openstick" / "scripts" / "led-test"
+            if led_test_script.exists():
+                inject_cmds = [
+                    "rm /usr/local/bin/led-test",
+                    f"write {led_test_script} /usr/local/bin/led-test",
+                    "set_inode_field /usr/local/bin/led-test mode 0100755",
+                    "set_inode_field /usr/local/bin/led-test uid 0",
+                    "set_inode_field /usr/local/bin/led-test gid 0",
+                ]
+                subprocess.run(
+                    [str(debugfs_bin), "-w", debugfs_target],
+                    input="\n".join(inject_cmds) + "\n",
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                cleaned_items.append("/usr/local/bin/led-test (injected)")
+
         return True, cleaned_items
     except Exception as e:
         print(f"[-] Error executing debugfs rootfs cleanup: {e}", file=sys.stderr)

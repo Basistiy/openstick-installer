@@ -21,7 +21,7 @@ class DeviceModel:
     notes: List[str] = field(default_factory=list)
 
 
-# Supported devices registry (initially supporting UZ801)
+# Supported devices registry
 DEVICES: Dict[str, DeviceModel] = {
     "uz801": DeviceModel(
         id="uz801",
@@ -38,6 +38,29 @@ DEVICES: Dict[str, DeviceModel] = {
             "Critical calibration partitions: modemst1, modemst2, fsg, fsc, persist, sec (contain unique IMEI and RF calibration).",
         ],
     ),
+    "hmuf02": DeviceModel(
+        id="hmuf02",
+        name="HMUF02 (4G LTE USB Modem Dongle)",
+        description="Qualcomm MSM8916 4G LTE Wi-Fi USB dongle (commonly HMUF02-V05 PCB revision).",
+        ram="512MB LPDDR3",
+        storage="4GB eMMC",
+        default_gateway="192.168.100.1",
+        adb_enable_url="http://192.168.100.1",
+        recommended_loader="prog_emmc_firehose_8916.mbn",
+        critical_partitions=["modemst1", "modemst2", "fsg", "fsc", "persist", "sec"],
+        notes=[
+            "Stock ADB: Plug into USB and check 'adb devices' (or check USB debug settings in the stock Web UI at http://192.168.100.1).",
+            "Fastboot reboot command: fastboot oem reboot-edl transitions directly to EDL mode.",
+            "If soft-reboot to EDL fails: Hold physical reset/recovery button or short EDL test pads while plugging into USB.",
+            "Critical calibration partitions: modemst1, modemst2, fsg, fsc, persist, sec (contain unique IMEI and RF calibration).",
+        ],
+    ),
+}
+
+DEVICE_ALIASES: Dict[str, str] = {
+    "uz801-v3": "uz801",
+    "hmuf": "hmuf02",
+    "hmuf02-v05": "hmuf02",
 }
 
 
@@ -47,8 +70,10 @@ def get_supported_devices() -> Dict[str, DeviceModel]:
 
 
 def get_device_by_id(device_id: str) -> Optional[DeviceModel]:
-    """Retrieve device by its string identifier (case-insensitive)."""
-    return DEVICES.get(device_id.lower().strip())
+    """Retrieve device by its string identifier or alias (case-insensitive)."""
+    key = device_id.lower().strip()
+    key = DEVICE_ALIASES.get(key, key)
+    return DEVICES.get(key)
 
 
 def get_device_by_index(idx: int) -> Optional[DeviceModel]:

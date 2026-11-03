@@ -26,6 +26,18 @@ class TestUI(unittest.TestCase):
         self.assertEqual(dev.id, "uz801")
 
     @patch("builtins.input", return_value="2")
+    def test_show_board_menu_select_hmuf02(self, _):
+        dev = show_board_menu()
+        self.assertIsNotNone(dev)
+        self.assertEqual(dev.id, "hmuf02")
+
+    @patch("builtins.input", return_value="hmuf02")
+    def test_show_board_menu_select_hmuf02_by_name(self, _):
+        dev = show_board_menu()
+        self.assertIsNotNone(dev)
+        self.assertEqual(dev.id, "hmuf02")
+
+    @patch("builtins.input", return_value="3")
     def test_show_board_menu_select_other(self, _):
         # Capturing stdout to verify GitHub issue link is presented
         captured = io.StringIO()
@@ -36,6 +48,7 @@ class TestUI(unittest.TestCase):
         output = captured.getvalue()
         self.assertIn("https://github.com/Basistiy/openstick-installer/issues", output)
         self.assertIn("BOARD SUPPORT REQUEST", output)
+        self.assertIn("UZ801 and HMUF02", output)
 
     def test_format_size(self):
         self.assertEqual(format_size(500), "500 B")

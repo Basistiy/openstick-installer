@@ -21,7 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from openstick import __version__
 from openstick.bootstrap import ensure_environment
-from openstick.devices import get_device_by_id, DeviceModel
+from openstick.devices import get_device_by_id, get_supported_devices, DeviceModel
 from openstick.ui import (
     print_banner,
     show_flashing_warning,
@@ -360,46 +360,60 @@ def handle_linux_install(
             print("    Please run the backup step or place your partition files into calibration/ first.", file=sys.stderr)
             return False
 
-    # 2. Fetch latest release from GitHub
+    # 2. Fetch latest release from GitHub (with fallback to local dist/ package if present)
+    local_dist_zip = PROJECT_ROOT / "dist" / f"openstick-{device.id}-linux.zip"
+    extracted_dir: Optional[Path] = None
+
     if not dry_run:
         print(f"[*] Fetching latest firmware releases from GitHub ({releases.DEFAULT_GITHUB_REPO})...")
         release = releases.get_latest_release()
-        if not release:
-            print("[-] Could not reach GitHub Releases API or no published releases found.", file=sys.stderr)
+        release_tag = release.get("tag_name", "latest") if release else None
+        if release_tag:
+            print(f"[+] Found release: '{release_tag}'")
+        asset = releases.find_matching_asset(release, device.id, mode="linux") if release else None
+
+        if asset and release_tag:
+            ok, extracted_dir = releases.download_and_extract_asset(
+                asset=asset,
+                tag_name=release_tag,
+                project_root=PROJECT_ROOT,
+                mode="linux",
+                dry_run=False,
+            )
+            if not ok or not extracted_dir:
+                print("[-] Failed downloading or extracting Linux release.", file=sys.stderr)
+                return False
+        elif local_dist_zip.is_file():
+            print(f"[+] Using local release package: dist/{local_dist_zip.name}")
+            ok, extracted_dir = releases.extract_local_release_zip(local_dist_zip, PROJECT_ROOT)
+            if not ok or not extracted_dir:
+                print("[-] Failed extracting local Linux release package.", file=sys.stderr)
+                return False
+        else:
+            if not release:
+                print("[-] Could not reach GitHub Releases API or no published releases found.", file=sys.stderr)
+            else:
+                print(f"[-] No matching Linux image found in release '{release_tag}' for board '{device.id}'.", file=sys.stderr)
+                print(
+                    f"    Expected asset name like: openstick-{device.id}-linux.zip or openstick-{device.id}-debian.zip",
+                    file=sys.stderr,
+                )
             return False
-        release_tag = release.get("tag_name", "latest")
     else:
         print(f"[DRY-RUN] Simulating GitHub Releases fetch ({releases.DEFAULT_GITHUB_REPO})...")
         release_tag = "v0.1.0"
-        release = {
-            "tag_name": release_tag,
-            "assets": [
-                {"name": f"openstick-{device.id}-linux.zip", "browser_download_url": "mock://", "size": 150000000}
-            ]
-        }
-    print(f"[+] Found release: '{release_tag}'")
-
-    # 3. Find matching Linux asset
-    asset = releases.find_matching_asset(release, device.id, mode="linux") if release else None
-    if not asset and not dry_run:
-        print(f"[-] No matching Linux image found in release '{release_tag}' for board '{device.id}'.", file=sys.stderr)
-        print("    Expected asset name like: openstick-uz801-linux.zip or openstick-uz801-debian.zip", file=sys.stderr)
-        return False
-
-    if not asset and dry_run:
+        print(f"[+] Found release: '{release_tag}'")
         asset = {"name": f"openstick-{device.id}-linux.zip", "browser_download_url": "mock://", "size": 150000000}
-
-    # 4. Download and extract image asset
-    ok, extracted_dir = releases.download_and_extract_asset(
-        asset=asset,
-        tag_name=release_tag,
-        project_root=PROJECT_ROOT,
-        mode="linux",
-        dry_run=dry_run,
-    )
-    if not ok or not extracted_dir:
-        print("[-] Failed downloading or extracting Linux release.", file=sys.stderr)
-        return False
+        ok, extracted_dir = releases.download_and_extract_asset(
+            asset=asset,
+            tag_name=release_tag,
+            project_root=PROJECT_ROOT,
+            mode="linux",
+            dry_run=True,
+        )
+        if not ok or not extracted_dir:
+            print("[-] Failed downloading or extracting Linux release.", file=sys.stderr)
+            return False
 
     # 5. Locate raw eMMC image in extracted folder
     raw_image = releases.find_raw_image_in_dir(extracted_dir)
@@ -637,6 +651,9 @@ def handle_sanitize_image(image_path_str: str) -> bool:
 
 
 def main():
+    supported_ids = list(get_supported_devices().keys())
+    supported_quoted = ", ".join(f"'{k}'" for k in supported_ids)
+
     parser = argparse.ArgumentParser(description="OpenStick MSM8916 Linux Installer")
     parser.add_argument(
         "--version",
@@ -646,7 +663,7 @@ def main():
     )
     parser.add_argument("--dry-run", action="store_true", help="Simulate execution without modifying hardware")
     parser.add_argument("--skip-bootstrap", action="store_true", help="Skip virtual environment bootstrap check")
-    parser.add_argument("--board", "--model", type=str, help="Specify board directly (e.g. uz801)")
+    parser.add_argument("--board", "--model", type=str, help=f"Specify board directly (e.g. {', '.join(supported_ids)})")
     parser.add_argument("--sanitize-image", type=str, help="Zero out unique partitions from a full_emmc.bin image")
     parser.add_argument("--create-release", action="store_true", help="Dump raw eMMC, sanitize, and package new release zip")
     parser.add_argument("--find", action="store_true", help="Scan network to find connected OpenStick running Linux")
@@ -666,11 +683,15 @@ def main():
 
     # Create release image CLI flag
     if args.create_release:
-        board_id = args.board or "uz801"
-        dev = get_device_by_id(board_id)
-        if not dev:
-            print(f"[-] Unknown board: '{board_id}'. Currently supporting: 'uz801'.", file=sys.stderr)
-            sys.exit(1)
+        if args.board:
+            dev = get_device_by_id(args.board)
+            if not dev:
+                print(f"[-] Unknown board: '{args.board}'. Currently supporting: {supported_quoted}.", file=sys.stderr)
+                sys.exit(1)
+        else:
+            dev = show_board_menu()
+            if dev is None:
+                sys.exit(0)
         success = handle_create_release_image(dev, dry_run=args.dry_run)
         sys.exit(0 if success else 1)
 
@@ -690,7 +711,7 @@ def main():
     if args.board:
         device = get_device_by_id(args.board)
         if not device:
-            print(f"[-] Unknown board: '{args.board}'. Currently supporting: 'uz801'.", file=sys.stderr)
+            print(f"[-] Unknown board: '{args.board}'. Currently supporting: {supported_quoted}.", file=sys.stderr)
             sys.exit(1)
     else:
         device = show_board_menu()

@@ -174,12 +174,14 @@ def build_release_packages(
     installer_zip = output_dir / "openstick-installer.zip"
     create_zip_archive(files, installer_zip)
 
-    # SHA256 checksum file
+    # SHA256 checksum file (includes installer zip + any present board firmware zips)
     sha256_file = output_dir / "SHA256SUMS.txt"
-    hash_installer = compute_sha256(installer_zip)
+    archives_to_hash = [installer_zip] + sorted(output_dir.glob("openstick-*-linux.zip"))
 
     with open(sha256_file, "w", encoding="utf-8") as f:
-        f.write(f"{hash_installer}  {installer_zip.name}\n")
+        for archive in archives_to_hash:
+            if archive.is_file():
+                f.write(f"{compute_sha256(archive)}  {archive.name}\n")
 
     return installer_zip, sha256_file
 

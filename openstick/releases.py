@@ -59,16 +59,20 @@ def find_matching_asset(release: Dict, device_id: str, mode: str = "linux") -> O
     """
     Find matching asset file in the release for the selected device model.
     Looks for assets like:
-      - openstick-uz801-linux.zip
-      - openstick-uz801-debian.zip
-      - uz801-linux.zip
+      - openstick-uz801-linux.zip / openstick-hmuf02-linux.zip
+      - openstick-uz801-debian.zip / openstick-hmuf02-debian.zip
+      - uz801-linux.zip / hmuf02-linux.zip
+    Never falls back to openstick-installer.zip or an asset for a different board.
     """
     device_id = device_id.lower().strip()
+    if not device_id:
+        return None
     assets = release.get("assets", [])
 
+    # 1. Exact board + mode match
     for asset in assets:
         name = asset.get("name", "").lower()
-        if not name.endswith(".zip"):
+        if not name.endswith(".zip") or "installer" in name:
             continue
 
         if device_id in name:
@@ -77,10 +81,18 @@ def find_matching_asset(release: Dict, device_id: str, mode: str = "linux") -> O
             elif mode == "stock" and ("stock" in name or "recovery" in name):
                 return asset
 
-    # Fallback: if only one zip is attached, use it
-    for asset in assets:
-        if asset.get("name", "").lower().endswith(".zip"):
-            return asset
+    # 2. Same-board fallback (e.g. openstick-hmuf02.zip without explicit 'linux' suffix)
+    if mode in ("linux", "debian"):
+        for asset in assets:
+            name = asset.get("name", "").lower()
+            if (
+                name.endswith(".zip")
+                and "installer" not in name
+                and "stock" not in name
+                and "recovery" not in name
+                and device_id in name
+            ):
+                return asset
 
     return None
 
@@ -251,4 +263,38 @@ def download_and_extract_asset(
         return True, extract_dir
     except Exception as e:
         print(f"[-] Failed to extract zip: {e}", file=sys.stderr)
+        return False, None
+
+
+def extract_local_release_zip(
+    zip_path: Path,
+    project_root: Path,
+) -> Tuple[bool, Optional[Path]]:
+    """
+    Extract a locally built release zip (e.g. dist/openstick-hmuf02-linux.zip)
+    into .cache/releases/local/<stem>/ for offline or pre-release installation.
+    """
+    if not zip_path.is_file():
+        return False, None
+
+    extract_dir = project_root / ".cache" / "releases" / "local" / zip_path.stem
+    if extract_dir.exists() and any(extract_dir.iterdir()):
+        # Refresh extraction if local zip is newer than cached extracted folder
+        try:
+            cached_img = find_raw_image_in_dir(extract_dir)
+            if cached_img and cached_img.stat().st_mtime >= zip_path.stat().st_mtime:
+                print(f"[+] Found cached local image files in: {extract_dir.relative_to(project_root)}")
+                return True, extract_dir
+        except OSError:
+            pass
+
+    print(f"[*] Extracting local firmware package {zip_path.name}...")
+    try:
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(str(zip_path), "r") as z:
+            z.extractall(str(extract_dir))
+        print(f"[+] Extracted local firmware files to: {extract_dir.relative_to(project_root)}")
+        return True, extract_dir
+    except Exception as e:
+        print(f"[-] Failed to extract local zip {zip_path.name}: {e}", file=sys.stderr)
         return False, None

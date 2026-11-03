@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# led-test: OpenStick UZ801 Sequential LED Flasher
+# led-test: OpenStick Sequential LED Flasher (UZ801 / HMUF02 / MSM8916)
 # Sequentially blinks Red (Power) -> Green (WLAN) -> Blue (WAN) LEDs.
 #
 
@@ -12,11 +12,19 @@ fi
 INTERVAL=0.5
 COUNT=0
 
+BOARD_MODEL="OpenStick"
+if [ -r /proc/device-tree/model ]; then
+    dt_model=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null)
+    if [ -n "$dt_model" ]; then
+        BOARD_MODEL="$dt_model"
+    fi
+fi
+
 show_help() {
     cat << EOF
 Usage: led-test [OPTIONS] [INTERVAL] [COUNT]
 
-Sequentially flashes the UZ801 status LEDs:
+Sequentially flashes the OpenStick status LEDs:
   Red (Power) -> Green (WLAN) -> Blue (WAN)
 
 Arguments:
@@ -71,7 +79,7 @@ done
 
 LED_BASE="/sys/class/leds"
 
-# Detect target LEDs in priority order (UZ801 RGB order)
+# Detect target LEDs in priority order (standard OpenStick RGB order)
 CANDIDATES=("red:power" "green:wlan" "blue:wan")
 LEDS=()
 
@@ -81,12 +89,12 @@ for name in "${CANDIDATES[@]}"; do
     fi
 done
 
-# Fallback: if UZ801 named LEDs not detected, scan for non-MMC LEDs
+# Fallback: if named RGB LEDs not detected, scan for non-MMC / non-SIM LEDs
 if [ ${#LEDS[@]} -eq 0 ]; then
     for path in "$LED_BASE"/*; do
         [ -d "$path" ] || continue
         bname=$(basename "$path")
-        if [[ "$bname" != mmc* && "$bname" != *default* ]]; then
+        if [[ "$bname" != mmc* && "$bname" != *default* && "$bname" != *sim* ]]; then
             LEDS+=("$bname")
         fi
     done
@@ -98,8 +106,9 @@ if [ ${#LEDS[@]} -eq 0 ]; then
 fi
 
 echo "================================================="
-echo "       OpenStick UZ801 LED Test Utility          "
+echo "       OpenStick LED Test Utility                "
 echo "================================================="
+echo "[*] Board:       $BOARD_MODEL"
 echo "[*] Active LEDs: ${LEDS[*]}"
 echo "[*] Interval:    ${INTERVAL}s"
 if [ "$COUNT" -gt 0 ]; then
