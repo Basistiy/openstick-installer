@@ -8,6 +8,7 @@ Cross-platform, minimal-action installation and flashing tool for the OpenStick 
 
 - **UZ801** (`UZ801` / `UZ801-V3`) — Qualcomm MSM8916 4G LTE USB Modem Dongle
 - **HMUF02** (`HMUF02` / `HMUF02-V05`) — Qualcomm MSM8916 4G LTE Wi-Fi USB Modem Dongle
+- **HM-MIFIB** (`HM-MIFIB` / `MF800`) — Qualcomm MSM8916 4G LTE Mobile Wi-Fi Router with Battery & 128×128 LCD
 
 ---
 
@@ -70,9 +71,9 @@ Launch the installer using `run.bat` (Windows), `run.command` (macOS), or `./run
 
 ```mermaid
 flowchart TD
-    A["Launch run.command / run.bat / run.sh"] --> B["Select Board:\n[1] UZ801  |  [2] HMUF02  |  [3] Other"]
-    B -->|"[3] Other"| C["Prompt to open GitHub Issue\n& Exit"]
-    B -->|"[1] UZ801 / [2] HMUF02"| D["Automatic Transition to EDL Mode\n(via fastboot oem reboot-edl, adb, or SSH)"]
+    A["Launch run.command / run.bat / run.sh"] --> B["Select Board:\n[1] UZ801  |  [2] HMUF02  |  [3] HM-MIFIB  |  [4] Other"]
+    B -->|"[4] Other"| C["Prompt to open GitHub Issue\n& Exit"]
+    B -->|"[1] UZ801 / [2] HMUF02 / [3] HM-MIFIB"| D["Automatic Transition to EDL Mode\n(via fastboot oem reboot-edl, adb, or SSH)"]
     D --> E{"Backup Original Partitions?"}
     E -->|"Yes (Recommended)"| F["Full dump -> backups/<board>_<ts>_<imei>/full_emmc.bin\n+ Slices calibration sidecars -> calibration/*.bin"]
     E -->|"Skip"| G["Use existing calibration/*.bin"]
@@ -138,6 +139,11 @@ Once the flashing process finishes and the device reboots:
    - Password: `openstick`
    - Stick IP: `192.168.4.1`
    - SSH Command: `ssh user@192.168.4.1`
+3. **HM-MIFIB (`MF800`) Built-In Hardware & LCD Tools**:
+   - `battery`: Show battery capacity %, voltage, and USB/battery power status.
+   - `lcd-show <status|glosos|wave|on|off>` (or `lcd_ctl`): Control the 128×128 ST7735S color LCD and backlight (short-pressing the physical power button also toggles the screen).
+   - `lte`: Query SIM card state, operator, signal strength, and LTE IP.
+   - `usb-mode <status|gadget|host>`: Switch USB port between gadget (network) and host mode.
 
 ---
 

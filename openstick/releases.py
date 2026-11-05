@@ -59,9 +59,9 @@ def find_matching_asset(release: Dict, device_id: str, mode: str = "linux") -> O
     """
     Find matching asset file in the release for the selected device model.
     Looks for assets like:
-      - openstick-uz801-linux.zip / openstick-hmuf02-linux.zip
-      - openstick-uz801-debian.zip / openstick-hmuf02-debian.zip
-      - uz801-linux.zip / hmuf02-linux.zip
+      - openstick-uz801-linux.zip / openstick-hmuf02-linux.zip / openstick-hmmifib-linux.zip
+      - openstick-uz801-debian.zip / openstick-hmuf02-debian.zip / openstick-hmmifib-debian.zip
+      - uz801-linux.zip / hmuf02-linux.zip / hmmifib-linux.zip
     Never falls back to openstick-installer.zip or an asset for a different board.
     """
     device_id = device_id.lower().strip()
@@ -69,13 +69,24 @@ def find_matching_asset(release: Dict, device_id: str, mode: str = "linux") -> O
         return None
     assets = release.get("assets", [])
 
+    # Build candidate tokens for this board (canonical ID + any longer/hyphenated aliases)
+    from openstick.devices import DEVICE_ALIASES, get_device_by_id
+    dev = get_device_by_id(device_id)
+    canonical_id = dev.id if dev else device_id
+    tokens = [canonical_id]
+    if device_id not in tokens:
+        tokens.append(device_id)
+    for alias, target in DEVICE_ALIASES.items():
+        if target == canonical_id and alias not in tokens and len(alias) >= 4:
+            tokens.append(alias)
+
     # 1. Exact board + mode match
     for asset in assets:
         name = asset.get("name", "").lower()
         if not name.endswith(".zip") or "installer" in name:
             continue
 
-        if device_id in name:
+        if any(tok in name for tok in tokens):
             if mode in ("linux", "debian") and ("linux" in name or "debian" in name):
                 return asset
             elif mode == "stock" and ("stock" in name or "recovery" in name):
@@ -90,7 +101,7 @@ def find_matching_asset(release: Dict, device_id: str, mode: str = "linux") -> O
                 and "installer" not in name
                 and "stock" not in name
                 and "recovery" not in name
-                and device_id in name
+                and any(tok in name for tok in tokens)
             ):
                 return asset
 

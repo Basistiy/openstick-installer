@@ -29,6 +29,7 @@ class TestReleases(unittest.TestCase):
                 {"name": "openstick-installer.zip", "browser_download_url": "https://..."},
                 {"name": "openstick-uz801-linux.zip", "browser_download_url": "https://..."},
                 {"name": "openstick-hmuf02-linux.zip", "browser_download_url": "https://..."},
+                {"name": "openstick-hmmifib-linux.zip", "browser_download_url": "https://..."},
                 {"name": "openstick-uz801-stock-recovery.zip", "browser_download_url": "https://..."},
             ]
         }
@@ -39,6 +40,18 @@ class TestReleases(unittest.TestCase):
         hmuf_asset = find_matching_asset(release, "hmuf02", mode="linux")
         self.assertIsNotNone(hmuf_asset)
         self.assertEqual(hmuf_asset["name"], "openstick-hmuf02-linux.zip")
+
+        mifib_asset = find_matching_asset(release, "hmmifib", mode="linux")
+        self.assertIsNotNone(mifib_asset)
+        self.assertEqual(mifib_asset["name"], "openstick-hmmifib-linux.zip")
+
+        mifib_alias_asset = find_matching_asset(
+            {"assets": [{"name": "openstick-hm-mifib-linux.zip", "browser_download_url": "https://..."}]},
+            "hmmifib",
+            mode="linux",
+        )
+        self.assertIsNotNone(mifib_alias_asset)
+        self.assertEqual(mifib_alias_asset["name"], "openstick-hm-mifib-linux.zip")
 
     def test_find_matching_asset_does_not_cross_match_other_board_or_installer(self):
         release = {

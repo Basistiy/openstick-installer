@@ -87,6 +87,18 @@ class TestMain(unittest.TestCase):
         self.assertIn("BACKUP VERIFICATION SUMMARY", output)
         self.assertIn("INSTALLING OPENSTICK LINUX (DEBIAN) FOR HMUF02", output)
 
+    @patch("sys.argv", ["main.py", "--board", "hmmifib", "--dry-run"])
+    @patch("builtins.input", side_effect=["y", "1"])
+    def test_main_hmmifib_board_flow_dry_run(self, mock_input):
+        captured = io.StringIO()
+        with patch("main.PROJECT_ROOT", self.test_dir), patch("sys.stdout", captured):
+            main()
+        output = captured.getvalue()
+        self.assertIn("HM-MIFIB (4G LTE Mobile Wi-Fi Router)", output)
+        self.assertIn("BACKUP VERIFICATION SUMMARY", output)
+        self.assertIn("INSTALLING OPENSTICK LINUX (DEBIAN) FOR HM-MIFIB", output)
+        self.assertIn("HM-MIFIB Battery & LCD Utilities:", output)
+
     @patch("sys.argv", ["main.py", "--board", "uz801", "--create-release", "--dry-run"])
     def test_main_create_release_dry_run(self):
         captured = io.StringIO()
@@ -108,6 +120,18 @@ class TestMain(unittest.TestCase):
         output = captured.getvalue()
         self.assertIn("CREATING SANITIZED RELEASE IMAGE FOR HMUF02", output)
         self.assertIn("openstick-hmuf02-linux.zip", output)
+        self.assertIn("RELEASE IMAGE GENERATION COMPLETED SUCCESSFULLY", output)
+
+    @patch("sys.argv", ["main.py", "--board", "hmmifib", "--create-release", "--dry-run"])
+    def test_main_hmmifib_create_release_dry_run(self):
+        captured = io.StringIO()
+        with patch("main.PROJECT_ROOT", self.test_dir), patch("sys.stdout", captured):
+            with self.assertRaises(SystemExit) as cm:
+                main()
+        self.assertEqual(cm.exception.code, 0)
+        output = captured.getvalue()
+        self.assertIn("CREATING SANITIZED RELEASE IMAGE FOR HM-MIFIB", output)
+        self.assertIn("openstick-hmmifib-linux.zip", output)
         self.assertIn("RELEASE IMAGE GENERATION COMPLETED SUCCESSFULLY", output)
 
     @patch("openstick.edl.is_edl_connected", return_value=False)

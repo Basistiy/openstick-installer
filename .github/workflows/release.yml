@@ -62,7 +62,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           sudo apt-get update && sudo apt-get install -y e2fsprogs
-          for board in uz801 hmuf02; do
+          for board in uz801 hmuf02 hmmifib; do
             asset_name="openstick-${board}-linux.zip"
             dest_path="dist/${asset_name}"
             if [ ! -f "${dest_path}" ]; then

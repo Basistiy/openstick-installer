@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# led-test: OpenStick Sequential LED Flasher (UZ801 / HMUF02 / MSM8916)
+# led-test: OpenStick Sequential LED Flasher (UZ801 / HMUF02 / HM-MIFIB / MSM8916)
 # Sequentially blinks Red (Power) -> Green (WLAN) -> Blue (WAN) LEDs.
 #
 

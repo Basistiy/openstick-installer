@@ -9,7 +9,8 @@ class TestDevices(unittest.TestCase):
         devices = get_supported_devices()
         self.assertIn("uz801", devices)
         self.assertIn("hmuf02", devices)
-        self.assertEqual(len(devices), 2)
+        self.assertIn("hmmifib", devices)
+        self.assertEqual(len(devices), 3)
 
     def test_get_uz801_by_id(self):
         dev = get_device_by_id("uz801")
@@ -34,6 +35,19 @@ class TestDevices(unittest.TestCase):
             self.assertIsNotNone(resolved)
             self.assertEqual(resolved.id, "hmuf02")
 
+    def test_get_hmmifib_by_id_and_aliases(self):
+        dev = get_device_by_id("hmmifib")
+        self.assertIsNotNone(dev)
+        self.assertEqual(dev.id, "hmmifib")
+        self.assertEqual(dev.recommended_loader, "prog_emmc_firehose_8916.mbn")
+        for part in ("modemst1", "modemst2", "fsg", "fsc", "persist", "sec"):
+            self.assertIn(part, dev.critical_partitions)
+
+        for alias in ("HMMIFIB", "HM-MIFIB", "hm-mifib", "mifib", "mf800", "MF800"):
+            resolved = get_device_by_id(alias)
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved.id, "hmmifib")
+
     def test_case_insensitivity(self):
         dev_upper = get_device_by_id("UZ801")
         self.assertIsNotNone(dev_upper)
@@ -55,6 +69,10 @@ class TestDevices(unittest.TestCase):
         dev2 = get_device_by_index(2)
         self.assertIsNotNone(dev2)
         self.assertEqual(dev2.id, "hmuf02")
+
+        dev3 = get_device_by_index(3)
+        self.assertIsNotNone(dev3)
+        self.assertEqual(dev3.id, "hmmifib")
 
         self.assertIsNone(get_device_by_index(0))
         self.assertIsNone(get_device_by_index(99))

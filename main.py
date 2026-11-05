@@ -468,7 +468,12 @@ def handle_linux_install(
                         rel_path = updated_dir
                     print(f"[+] Updated backup metadata and folder with IMEI: {rel_path}")
 
-        show_post_install_info("linux", detected_ip=detected_ip, detected_imei=detected_imei)
+        show_post_install_info(
+            "linux",
+            detected_ip=detected_ip,
+            detected_imei=detected_imei,
+            device_id=device.id,
+        )
         return True
     return False
 

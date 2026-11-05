@@ -261,6 +261,7 @@ def show_post_install_info(
     mode: str,
     detected_ip: Optional[str] = None,
     detected_imei: Optional[str] = None,
+    device_id: Optional[str] = None,
 ):
     """Display connection instructions after flashing completes."""
     print("\n" + "=" * 65)
@@ -303,6 +304,13 @@ def show_post_install_info(
             print("     - SSH:      ssh user@192.168.4.1 (Password: 1)")
             print("\n  3. Test Hardware LEDs:")
             print("     - Command:  led-test (or 'led-test --help' for options)")
+
+        if device_id and device_id.lower() in ("hmmifib", "hm-mifib", "mifib", "mf800"):
+            print("\n  4. HM-MIFIB Battery & LCD Utilities:")
+            print("     - Battery:  battery (capacity %, voltage & charging status)")
+            print("     - LCD Mode: lcd-show <status|glosos|wave|on|off> (or lcd_ctl)")
+            print("     - Cellular: lte (SIM status, signal strength & IP)")
+            print("     - USB Role: usb-mode <status|gadget|host>")
     else:
         print("          STOCK FACTORY FIRMWARE RESTORED")
         print("=" * 65)

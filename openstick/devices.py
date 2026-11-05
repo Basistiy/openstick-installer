@@ -55,12 +55,32 @@ DEVICES: Dict[str, DeviceModel] = {
             "Critical calibration partitions: modemst1, modemst2, fsg, fsc, persist, sec (contain unique IMEI and RF calibration).",
         ],
     ),
+    "hmmifib": DeviceModel(
+        id="hmmifib",
+        name="HM-MIFIB (4G LTE Mobile Wi-Fi Router)",
+        description="Qualcomm MSM8916 4G LTE portable Wi-Fi router with battery and 128x128 ST7735S LCD (MF800).",
+        ram="512MB LPDDR3",
+        storage="4GB eMMC",
+        default_gateway="192.168.100.1",
+        adb_enable_url="http://192.168.100.1",
+        recommended_loader="prog_emmc_firehose_8916.mbn",
+        critical_partitions=["modemst1", "modemst2", "fsg", "fsc", "persist", "sec"],
+        notes=[
+            "Stock ADB: Plug into USB and check 'adb devices' (or enable USB debugging via the stock Web UI at http://192.168.100.1).",
+            "Fastboot reboot command: fastboot oem reboot-edl transitions directly to EDL mode.",
+            "If soft-reboot to EDL fails: Remove battery, hold reset/recovery button (or short EDL pads) while plugging into USB.",
+            "Critical calibration partitions: modemst1, modemst2, fsg, fsc, persist, sec (contain unique IMEI and RF calibration).",
+        ],
+    ),
 }
 
 DEVICE_ALIASES: Dict[str, str] = {
     "uz801-v3": "uz801",
     "hmuf": "hmuf02",
     "hmuf02-v05": "hmuf02",
+    "hm-mifib": "hmmifib",
+    "mifib": "hmmifib",
+    "mf800": "hmmifib",
 }
 
 

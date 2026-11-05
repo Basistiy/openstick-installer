@@ -14,6 +14,7 @@ from openstick.ui import (
     show_action_menu,
     prompt_backup_partitions,
     show_other_board_message,
+    show_post_install_info,
 )
 from openstick.devices import get_device_by_id
 
@@ -38,6 +39,18 @@ class TestUI(unittest.TestCase):
         self.assertEqual(dev.id, "hmuf02")
 
     @patch("builtins.input", return_value="3")
+    def test_show_board_menu_select_hmmifib(self, _):
+        dev = show_board_menu()
+        self.assertIsNotNone(dev)
+        self.assertEqual(dev.id, "hmmifib")
+
+    @patch("builtins.input", return_value="hm-mifib")
+    def test_show_board_menu_select_hmmifib_by_alias(self, _):
+        dev = show_board_menu()
+        self.assertIsNotNone(dev)
+        self.assertEqual(dev.id, "hmmifib")
+
+    @patch("builtins.input", return_value="4")
     def test_show_board_menu_select_other(self, _):
         # Capturing stdout to verify GitHub issue link is presented
         captured = io.StringIO()
@@ -48,7 +61,7 @@ class TestUI(unittest.TestCase):
         output = captured.getvalue()
         self.assertIn("https://github.com/Basistiy/openstick-installer/issues", output)
         self.assertIn("BOARD SUPPORT REQUEST", output)
-        self.assertIn("UZ801 and HMUF02", output)
+        self.assertIn("UZ801, HMUF02 and HMMIFIB", output)
 
     def test_format_size(self):
         self.assertEqual(format_size(500), "500 B")
@@ -119,6 +132,15 @@ class TestUI(unittest.TestCase):
         self.assertIn("MSM8916 Linux Installer", output)
         self.assertIn("WARNING & DISCLAIMER", output)
         self.assertIn("NOT responsible", output)
+
+    def test_show_post_install_info_hmmifib_shows_lcd_and_battery_tools(self):
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            show_post_install_info("linux", detected_ip="192.168.5.1", detected_imei="868837087737157", device_id="hmmifib")
+        output = captured.getvalue()
+        self.assertIn("HM-MIFIB Battery & LCD Utilities:", output)
+        self.assertIn("battery", output)
+        self.assertIn("lcd-show", output)
 
 
 if __name__ == "__main__":
