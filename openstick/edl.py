@@ -6,6 +6,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -966,22 +967,118 @@ def verify_raw_backup(
     return is_complete, report
 
 
+SECTOR_SIZE = 512
+GPT_BACKUP_SECTORS = 33  # backup partition entries (32) + backup header (1)
+
+
+def read_device_total_sectors(loader: Optional[Path] = None) -> Optional[int]:
+    """
+    Read the stick's primary GPT over EDL and return the eMMC size in sectors,
+    taken from the header's backup LBA. Returns None if it cannot be determined.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "device_gpt.bin"
+        if not run_edl_command(["rs", "0", "34", str(out)], loader=loader) or not out.exists():
+            return None
+        data = out.read_bytes()
+    if len(data) < 2 * SECTOR_SIZE or data[SECTOR_SIZE : SECTOR_SIZE + 8] != b"EFI PART":
+        return None
+    backup_lba = struct.unpack_from("<Q", data, SECTOR_SIZE + 32)[0]
+    return backup_lba + 1
+
+
+def check_image_fits(image_path: Path, device_sectors: int) -> Tuple[bool, str]:
+    """
+    Check that a raw image fits on an eMMC of device_sectors sectors: the file itself,
+    and every GPT partition, which must end before the device's backup GPT.
+    """
+    gpt = parse_gpt_from_raw_image(image_path)
+    parts = [p for name, p in gpt.items() if name != "__metadata__"]
+    image_sectors = (image_path.stat().st_size + SECTOR_SIZE - 1) // SECTOR_SIZE
+    last_usable = device_sectors - GPT_BACKUP_SECTORS - 1
+    last_part_end = max((p["end_sector"] for p in parts), default=0)
+
+    if image_sectors > device_sectors:
+        return False, (
+            f"image is {image_sectors} sectors but this stick's eMMC has only {device_sectors} "
+            f"({(image_sectors - device_sectors) * SECTOR_SIZE / 1e6:.1f} MB too large)"
+        )
+    if last_part_end > last_usable:
+        return False, (
+            f"a partition ends at sector {last_part_end}, past this stick's last usable "
+            f"sector {last_usable}"
+        )
+    return True, f"image fits ({image_sectors} of {device_sectors} sectors)"
+
+
+def verify_flashed_image(image_path: Path, loader: Optional[Path] = None, sample_sectors: int = 64) -> bool:
+    """
+    Read back the GPT plus the first and last sectors of every partition and compare
+    them with the image. edl can report success for writes the device rejected
+    (bkerler/edl#809), so its exit status alone does not prove anything was written.
+    """
+    gpt = parse_gpt_from_raw_image(image_path)
+    regions = [(0, 34)]
+    for name, p in gpt.items():
+        if name == "__metadata__":
+            continue
+        count = min(sample_sectors, p["num_sectors"])
+        regions.append((p["start_sector"], count))
+        if p["num_sectors"] > sample_sectors:
+            regions.append((p["end_sector"] - sample_sectors + 1, sample_sectors))
+
+    print(f"[*] Verifying flash by reading back {len(regions)} regions...")
+    with open(image_path, "rb") as img, tempfile.TemporaryDirectory() as tmp:
+        for start, count in regions:
+            out = Path(tmp) / f"rb_{start}.bin"
+            if not run_edl_command(["rs", str(start), str(count), str(out)], loader=loader) or not out.exists():
+                print(f"[-] Read-back of sectors {start}+{count} failed.", file=sys.stderr)
+                return False
+            img.seek(start * SECTOR_SIZE)
+            expected = img.read(count * SECTOR_SIZE)
+            expected += b"\x00" * (count * SECTOR_SIZE - len(expected))
+            if out.read_bytes() != expected:
+                print(
+                    f"[-] Sectors {start}+{count} on the stick do not match the image. "
+                    "The flash did not complete.",
+                    file=sys.stderr,
+                )
+                return False
+    print("[+] Read-back matches the image.")
+    return True
+
+
 def flash_raw_emmc_via_edl(
     image_path: Path,
     calibration_dir: Optional[Path] = None,
     inject_calibration: bool = True,
     loader: Optional[Path] = None,
     dry_run: bool = False,
+    device_sectors: Optional[int] = None,
 ) -> bool:
     """
     Flash a raw eMMC image via EDL mode:
-    1. Injects calibration partitions in-place if requested.
-    2. Runs 'edl wf <image_path> --memory=eMMC'.
-    3. Runs 'edl reset' to reboot stick.
+    1. Checks the image fits this stick's eMMC (device_sectors, or read from its GPT).
+    2. Injects calibration partitions in-place if requested.
+    3. Runs 'edl wf <image_path> --memory=eMMC'.
+    4. Verifies the write by reading back the GPT and partition edges.
+    5. Runs 'edl reset' to reboot stick.
     """
     if not image_path.exists() and not dry_run:
         print(f"[-] Image file not found: {image_path}", file=sys.stderr)
         return False
+
+    if not dry_run:
+        if device_sectors is None:
+            device_sectors = read_device_total_sectors(loader=loader)
+        if device_sectors is None:
+            print("[!] Could not determine this stick's eMMC size; skipping the size check.", file=sys.stderr)
+        else:
+            fits, reason = check_image_fits(image_path, device_sectors)
+            if not fits:
+                print(f"[-] Refusing to flash: {reason}.", file=sys.stderr)
+                return False
+            print(f"[+] Size check: {reason}.")
 
     if inject_calibration and calibration_dir:
         print(f"[*] Injecting unique calibration files from {calibration_dir} into {image_path.name}...")
@@ -997,6 +1094,10 @@ def flash_raw_emmc_via_edl(
     flash_ok = run_edl_command(["wf", str(image_path)], loader=loader, dry_run=dry_run, timeout=2400)
     if not flash_ok:
         print("[-] Raw image flashing failed.", file=sys.stderr)
+        return False
+
+    if not dry_run and not verify_flashed_image(image_path, loader=loader):
+        print("[-] The stick is still in EDL mode; it was not rebooted.", file=sys.stderr)
         return False
 
     print("[*] Flashing complete. Rebooting device (edl reset)...")
