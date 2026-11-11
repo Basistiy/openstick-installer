@@ -431,13 +431,20 @@ def handle_linux_install(
         print("[-] Device must be in Qualcomm 9008 EDL mode to flash.", file=sys.stderr)
         return False
 
-    # 7. Inject calibration in-place and flash raw image via EDL
+    # 7. Inject calibration in-place and flash raw image via EDL.
+    # A full dump taken from this stick in this session gives its exact eMMC size;
+    # otherwise flash_raw_emmc_via_edl reads it from the stick's GPT.
+    device_sectors: Optional[int] = None
+    if backup_dir and (backup_dir / "full_emmc.bin").exists():
+        device_sectors = (backup_dir / "full_emmc.bin").stat().st_size // 512
+
     flash_ok = edl.flash_raw_emmc_via_edl(
         image_path=raw_image,
         calibration_dir=calibration_dir,
         inject_calibration=True,
         loader=loader,
         dry_run=dry_run,
+        device_sectors=device_sectors,
     )
 
     if flash_ok:
