@@ -634,40 +634,11 @@ def clean_rootfs_sensitive_data(
     except Exception:
         pass
 
-    # Step 1: Collect allocated filesystem block numbers of sensitive files before unlinking
-    blocks_to_zero: set = set()
-    block_size = 4096
-    try:
-        stats_res = subprocess.run(
-            [str(debugfs_bin), "-R", "stats", debugfs_target],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        m_bs = re.search(r"Block size:\s+(\d+)", stats_res.stdout or "")
-        if m_bs:
-            block_size = int(m_bs.group(1))
-
-        blocks_query = "\n".join(f"blocks {f}" for f in files_to_remove) + "\n"
-        blk_res = subprocess.run(
-            [str(debugfs_bin), debugfs_target],
-            input=blocks_query,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        for tok in re.findall(r"\b(\d+)\b", blk_res.stdout or ""):
-            bnum = int(tok)
-            if bnum > 0 and (bnum + 1) * block_size <= rootfs_info["byte_size"]:
-                blocks_to_zero.add(bnum)
-    except Exception:
-        blocks_to_zero = set()
-
     rm_commands = [f"rm {f}" for f in files_to_remove]
     cleaned_items.extend(files_to_remove)
 
     try:
-        # Step 2: Unlink sensitive files via debugfs first so extent trees free cleanly
+        # Step 1: Unlink sensitive files via debugfs cleanly
         subprocess.run(
             [str(debugfs_bin), "-w", debugfs_target],
             input="\n".join(rm_commands) + "\n",
@@ -676,16 +647,7 @@ def clean_rootfs_sensitive_data(
             timeout=60,
         )
 
-        # Step 3: Overwrite the freed blocks with 0x00 so no deleted log/IMEI bytes remain in free space
-        if blocks_to_zero and block_size >= 1024:
-            zero_blk = b"\x00" * block_size
-            with open(image_path, "r+b") as f:
-                for bnum in sorted(blocks_to_zero):
-                    f.seek(offset + bnum * block_size)
-                    f.write(zero_blk)
-                f.flush()
-
-        # Step 4: Inject /usr/local/bin/led-test after zeroing freed blocks
+        # Step 2: Inject /usr/local/bin/led-test if requested
         if inject_led_test:
             repo_root = Path(__file__).resolve().parent.parent
             led_test_script = repo_root / "openstick" / "scripts" / "led-test"
