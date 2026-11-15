@@ -61,12 +61,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          mkdir -p dist
           for board in uz801 hmuf02 hmmifib; do
             asset_name="openstick-${board}-linux.zip"
             dest_path="dist/${asset_name}"
             if [ ! -f "${dest_path}" ]; then
-              echo "[*] Looking up latest published ${asset_name} across GitHub Releases..."
-              download_url=$(python3 - "${asset_name}" << 'PY'
+              if [ "${board}" = "uz801" ]; then
+                echo "[*] Using known-good clean uz801 firmware image from v0.0.1 release..."
+                download_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v0.0.1/openstick-uz801-linux.zip"
+              else
+                echo "[*] Looking up latest published ${asset_name} across GitHub Releases..."
+                download_url=$(python3 - "${asset_name}" << 'PY'
           import json, os, sys, urllib.request
           target = sys.argv[1]
           repo = os.environ.get("GITHUB_REPOSITORY", "Basistiy/openstick-installer")
@@ -87,9 +92,7 @@ jobs:
           except Exception:
               pass
           PY
-              )
-              if [ -z "${download_url}" ] && [ "${board}" = "uz801" ]; then
-                download_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v0.0.1/openstick-uz801-linux.zip"
+                )
               fi
               if [ -n "${download_url}" ]; then
                 echo "[*] Fetching ${asset_name} from ${download_url}..."
