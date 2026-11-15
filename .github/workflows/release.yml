@@ -57,11 +57,10 @@ jobs:
         run: |
           python scripts/package_release.py --version "${{ steps.release_info.outputs.tag }}"
 
-      - name: Fetch and Prepare Linux Firmware Dump Assets
+      - name: Fetch Linux Firmware Dump Assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          sudo apt-get update && sudo apt-get install -y e2fsprogs
           for board in uz801 hmuf02 hmmifib; do
             asset_name="openstick-${board}-linux.zip"
             dest_path="dist/${asset_name}"
@@ -98,10 +97,6 @@ jobs:
               else
                 echo "[!] No previously published ${asset_name} found on GitHub Releases yet; skipping carry-forward."
               fi
-            fi
-            if [ -f "${dest_path}" ]; then
-              echo "[*] Ensuring /usr/local/bin/led-test is installed in ${asset_name}..."
-              python scripts/ensure_image_led_test.py "${dest_path}"
             fi
           done
           cd dist
