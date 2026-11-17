@@ -331,6 +331,7 @@ def handle_linux_install(
     device: DeviceModel,
     dry_run: bool = False,
     backup_dir: Optional[Path] = None,
+    use_local: bool = False,
 ) -> bool:
     """Download general-purpose Linux image, inject calibration, and flash via EDL."""
     print("\n" + "=" * 65)
@@ -360,11 +361,21 @@ def handle_linux_install(
             print("    Please run the backup step or place your partition files into calibration/ first.", file=sys.stderr)
             return False
 
-    # 2. Fetch latest release from GitHub (with fallback to local dist/ package if present)
+    # 2. Fetch latest release from GitHub (with fallback or override to local dist/ package)
     local_dist_zip = PROJECT_ROOT / "dist" / f"openstick-{device.id}-linux.zip"
     extracted_dir: Optional[Path] = None
 
-    if not dry_run:
+    if use_local:
+        if local_dist_zip.is_file():
+            print(f"[+] Using local release package (--local): dist/{local_dist_zip.name}")
+            ok, extracted_dir = releases.extract_local_release_zip(local_dist_zip, PROJECT_ROOT)
+            if not ok or not extracted_dir:
+                print("[-] Failed extracting local Linux release package.", file=sys.stderr)
+                return False
+        else:
+            print(f"[-] Local release package not found: dist/{local_dist_zip.name}", file=sys.stderr)
+            return False
+    elif not dry_run:
         print(f"[*] Fetching latest firmware releases from GitHub ({releases.DEFAULT_GITHUB_REPO})...")
         release = releases.get_latest_release()
         release_tag = release.get("tag_name", "latest") if release else None
@@ -674,6 +685,7 @@ def main():
         version=f"OpenStick Installer v{__version__}",
     )
     parser.add_argument("--dry-run", action="store_true", help="Simulate execution without modifying hardware")
+    parser.add_argument("--local", action="store_true", help="Use local firmware package from dist/ instead of downloading from GitHub Releases")
     parser.add_argument("--skip-bootstrap", action="store_true", help="Skip virtual environment bootstrap check")
     parser.add_argument("--board", "--model", type=str, help=f"Specify board directly (e.g. {', '.join(supported_ids)})")
     parser.add_argument("--sanitize-image", type=str, help="Zero out unique partitions from a full_emmc.bin image")
@@ -756,7 +768,7 @@ def main():
     # Step 3: Action Selection (Install Linux vs. Restore Stock Backup vs. Create Release vs. Exit)
     action = show_action_menu(device)
     if action == "linux":
-        handle_linux_install(device, dry_run=args.dry_run, backup_dir=backup_dir)
+        handle_linux_install(device, dry_run=args.dry_run, backup_dir=backup_dir, use_local=args.local)
     elif action == "stock":
         handle_stock_recovery(device, dry_run=args.dry_run)
     elif action == "release":

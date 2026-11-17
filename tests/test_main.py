@@ -412,6 +412,40 @@ class TestMain(unittest.TestCase):
             self.assertTrue(handle_linux_install(device, dry_run=False))
             mock_flash.assert_called_once()
 
+    def test_handle_linux_install_use_local(self):
+        import zipfile
+        device = get_device_by_id("uz801")
+        loader_path = self.test_dir / "loaders" / "prog_emmc_firehose_8916.mbn"
+        loader_path.parent.mkdir(parents=True, exist_ok=True)
+        loader_path.write_bytes(b"\x00" * 1024)
+
+        cal_dir = self.test_dir / "calibration"
+        cal_dir.mkdir(parents=True, exist_ok=True)
+        for part in device.critical_partitions:
+            (cal_dir / f"{part}.bin").write_bytes(b"CALIB" + b"\x01" * 1024)
+
+        img_path = self.test_dir / "extracted" / "full_emmc.bin"
+        create_synthetic_raw_image(img_path)
+
+        dist_dir = self.test_dir / "dist"
+        dist_dir.mkdir(parents=True, exist_ok=True)
+        local_zip = dist_dir / "openstick-uz801-linux.zip"
+        with zipfile.ZipFile(local_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(img_path, arcname="full_emmc.bin")
+
+        with patch("main.PROJECT_ROOT", self.test_dir), \
+             patch("openstick.edl.resolve_loader", return_value=loader_path), \
+             patch("openstick.releases.get_latest_release") as mock_get_release, \
+             patch("openstick.edl.is_edl_connected", return_value=True), \
+             patch("openstick.edl.flash_raw_emmc_via_edl", return_value=True) as mock_flash, \
+             patch("openstick.network.wait_for_debian_boot", return_value="192.168.5.1"), \
+             patch("openstick.network.ensure_stick_led_test", return_value=True), \
+             patch("openstick.network.get_stick_imei", return_value="868367079149880"), \
+             patch("sys.stdout", io.StringIO()):
+            self.assertTrue(handle_linux_install(device, dry_run=False, use_local=True))
+            mock_flash.assert_called_once()
+            mock_get_release.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
