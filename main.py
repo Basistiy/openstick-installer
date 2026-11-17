@@ -333,7 +333,6 @@ def handle_linux_install(
     device: DeviceModel,
     dry_run: bool = False,
     backup_dir: Optional[Path] = None,
-    use_local: bool = False,
     custom_image_path: Optional[str] = None,
 ) -> bool:
     """Download general-purpose Linux image (or prepare custom image), inject calibration, and flash via EDL."""
@@ -382,21 +381,11 @@ def handle_linux_install(
             print("[-] Failed to prepare custom raw image for flashing.", file=sys.stderr)
             return False
     else:
-        # Fetch latest release from GitHub (with fallback or override to local dist/ package)
+        # Fetch latest release from GitHub (with fallback to local dist/ package if present)
         local_dist_zip = PROJECT_ROOT / "dist" / f"openstick-{device.id}-linux.zip"
         extracted_dir: Optional[Path] = None
 
-        if use_local:
-            if local_dist_zip.is_file():
-                print(f"[+] Using local release package (--local): dist/{local_dist_zip.name}")
-                ok, extracted_dir = releases.extract_local_release_zip(local_dist_zip, PROJECT_ROOT)
-                if not ok or not extracted_dir:
-                    print("[-] Failed extracting local Linux release package.", file=sys.stderr)
-                    return False
-            else:
-                print(f"[-] Local release package not found: dist/{local_dist_zip.name}", file=sys.stderr)
-                return False
-        elif not dry_run:
+        if not dry_run:
             print(f"[*] Fetching latest firmware releases from GitHub ({releases.DEFAULT_GITHUB_REPO})...")
             release = releases.get_latest_release()
             release_tag = release.get("tag_name", "latest") if release else None
@@ -706,7 +695,6 @@ def main():
         version=f"OpenStick Installer v{__version__}",
     )
     parser.add_argument("--dry-run", action="store_true", help="Simulate execution without modifying hardware")
-    parser.add_argument("--local", action="store_true", help="Use local firmware package from dist/ instead of downloading from GitHub Releases")
     parser.add_argument("--skip-bootstrap", action="store_true", help="Skip virtual environment bootstrap check")
     parser.add_argument("--board", "--model", type=str, help=f"Specify board directly (e.g. {', '.join(supported_ids)}, custom)")
     parser.add_argument("--custom-image", type=str, help="Path to custom raw eMMC image (.bin, .img) or zip package to flash")
@@ -795,7 +783,6 @@ def main():
             device,
             dry_run=args.dry_run,
             backup_dir=backup_dir,
-            use_local=args.local,
             custom_image_path=args.custom_image,
         )
     elif action == "stock":
