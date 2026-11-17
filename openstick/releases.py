@@ -309,3 +309,129 @@ def extract_local_release_zip(
     except Exception as e:
         print(f"[-] Failed to extract local zip {zip_path.name}: {e}", file=sys.stderr)
         return False, None
+
+
+def extract_custom_image_archive(
+    zip_path: Path,
+    project_root: Path,
+    dry_run: bool = False,
+) -> Tuple[bool, Optional[Path]]:
+    """
+    Extract a custom release zip into .cache/releases/custom/<stem>/
+    and return the path to the extracted folder.
+    """
+    if dry_run:
+        extract_dir = project_root / ".cache" / "releases" / "custom" / zip_path.stem
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        raw_img = extract_dir / "full_emmc.bin"
+        if not raw_img.exists():
+            from openstick.edl import create_synthetic_raw_image
+            create_synthetic_raw_image(raw_img)
+        return True, extract_dir
+
+    if not zip_path.is_file():
+        print(f"[-] Custom image archive not found: {zip_path}", file=sys.stderr)
+        return False, None
+
+    extract_dir = project_root / ".cache" / "releases" / "custom" / zip_path.stem
+    if extract_dir.exists() and any(extract_dir.iterdir()):
+        try:
+            cached_img = find_raw_image_in_dir(extract_dir)
+            if cached_img and cached_img.stat().st_mtime >= zip_path.stat().st_mtime:
+                print(f"[+] Found cached extracted custom image in: {extract_dir.relative_to(project_root)}")
+                return True, extract_dir
+        except OSError:
+            pass
+
+    print(f"[*] Extracting custom image archive {zip_path.name}...")
+    try:
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(str(zip_path), "r") as z:
+            z.extractall(str(extract_dir))
+
+        for f in extract_dir.iterdir():
+            if f.is_file() and (f.suffix.lower() in [".txt", ".md", ".json", ".zip", ".log"] or f.name.startswith(".")):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+        print(f"[+] Extracted custom firmware files to: {extract_dir.relative_to(project_root)}")
+        return True, extract_dir
+    except Exception as e:
+        print(f"[-] Failed to extract custom zip {zip_path.name}: {e}", file=sys.stderr)
+        return False, None
+
+
+def prepare_custom_raw_image(
+    image_path: Path,
+    project_root: Path,
+    dry_run: bool = False,
+) -> Tuple[bool, Optional[Path]]:
+    """
+    Prepare a custom raw eMMC image file for flashing.
+    If image is a .zip archive, extracts it and locates full_emmc.bin inside.
+    If image is a .bin/.img file, creates a working copy in .cache/custom/
+    so the user's source file remains unmodified when calibration is injected in-place.
+    """
+    if dry_run:
+        cache_dir = project_root / ".cache" / "custom"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        target = cache_dir / (image_path.name if image_path.name.endswith(".bin") else "full_emmc.bin")
+        if not target.exists():
+            from openstick.edl import create_synthetic_raw_image
+            create_synthetic_raw_image(target)
+        return True, target
+
+    if not image_path.exists():
+        print(f"[-] Custom image not found: {image_path}", file=sys.stderr)
+        return False, None
+
+    if image_path.is_file() and image_path.suffix.lower() == ".zip":
+        ok, extract_dir = extract_custom_image_archive(image_path, project_root, dry_run=dry_run)
+        if not ok or not extract_dir:
+            return False, None
+        raw_img = find_raw_image_in_dir(extract_dir)
+        if not raw_img:
+            print(f"[-] No raw eMMC image (.bin or full_emmc.bin) found inside {image_path.name}.", file=sys.stderr)
+            return False, None
+        return True, raw_img
+
+    if image_path.is_dir():
+        raw_img = find_raw_image_in_dir(image_path)
+        if not raw_img:
+            print(f"[-] No raw eMMC image found inside directory {image_path}.", file=sys.stderr)
+            return False, None
+        image_path = raw_img
+
+    # Validate GPT signature if file size >= 1024 bytes
+    try:
+        if image_path.stat().st_size >= 1024:
+            with open(image_path, "rb") as f:
+                f.seek(512)
+                sig = f.read(8)
+                if sig != b"EFI PART":
+                    print(f"[!] Warning: Image does not have standard GPT signature at sector 1 ('{sig.decode('ascii', errors='replace')}').")
+    except OSError:
+        pass
+
+    # Create working copy in .cache/custom/ to protect original image from in-place modification
+    cache_dir = project_root / ".cache" / "custom"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    working_copy = cache_dir / image_path.name
+
+    try:
+        if (
+            working_copy.exists()
+            and working_copy.stat().st_size == image_path.stat().st_size
+            and working_copy.stat().st_mtime >= image_path.stat().st_mtime
+        ):
+            print(f"[+] Using cached working copy in {working_copy.relative_to(project_root)}")
+            return True, working_copy
+
+        print(f"[*] Preparing working copy of custom image in {working_copy.relative_to(project_root)}...")
+        shutil.copyfile(image_path, working_copy)
+        return True, working_copy
+    except OSError as e:
+        print(f"[!] Could not create working copy in .cache ({e}). Using original image directly.")
+        return True, image_path

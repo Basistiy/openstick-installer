@@ -99,6 +99,29 @@ class TestMain(unittest.TestCase):
         self.assertIn("INSTALLING OPENSTICK LINUX (DEBIAN) FOR HM-MIFIB", output)
         self.assertIn("HM-MIFIB Battery & LCD Utilities:", output)
 
+    @patch("sys.argv", ["main.py", "--dry-run"])
+    @patch("builtins.input", side_effect=["4", "y", "1", "/mock/custom_image.bin"])
+    def test_main_custom_board_interactive_flow_dry_run(self, mock_input):
+        captured = io.StringIO()
+        with patch("main.PROJECT_ROOT", self.test_dir), patch("sys.stdout", captured):
+            main()
+        output = captured.getvalue()
+        self.assertIn("Custom Image (MSM8916)", output)
+        self.assertIn("BACKUP VERIFICATION SUMMARY", output)
+        self.assertIn("CUSTOM LINUX IMAGE SPECIFICATION", output)
+        self.assertIn("INSTALLING OPENSTICK LINUX (DEBIAN) CUSTOM LINUX IMAGE", output)
+
+    @patch("sys.argv", ["main.py", "--custom-image", "/mock/custom_image.bin", "--dry-run"])
+    @patch("builtins.input", side_effect=["y", "1"])
+    def test_main_custom_image_cli_flow_dry_run(self, mock_input):
+        captured = io.StringIO()
+        with patch("main.PROJECT_ROOT", self.test_dir), patch("sys.stdout", captured):
+            main()
+        output = captured.getvalue()
+        self.assertIn("Custom Image (MSM8916)", output)
+        self.assertIn("BACKUP VERIFICATION SUMMARY", output)
+        self.assertIn("INSTALLING OPENSTICK LINUX (DEBIAN) CUSTOM LINUX IMAGE", output)
+
     @patch("sys.argv", ["main.py", "--board", "uz801", "--create-release", "--dry-run"])
     def test_main_create_release_dry_run(self):
         captured = io.StringIO()
@@ -445,6 +468,56 @@ class TestMain(unittest.TestCase):
             self.assertTrue(handle_linux_install(device, dry_run=False, use_local=True))
             mock_flash.assert_called_once()
             mock_get_release.assert_not_called()
+
+    def test_handle_linux_install_custom_image_bin(self):
+        calib_dir, _, _, loader_path = self._prepare_mock_install_workspace()
+        custom_bin = self.test_dir / "my_custom_os.bin"
+        create_synthetic_raw_image(custom_bin)
+
+        from openstick.devices import CUSTOM_DEVICE
+
+        captured = io.StringIO()
+        with patch("main.PROJECT_ROOT", self.test_dir), \
+             patch("openstick.edl.resolve_loader", return_value=loader_path), \
+             patch("openstick.ui.prompt_custom_image_path", return_value=custom_bin) as mock_prompt, \
+             patch("openstick.edl.is_edl_connected", return_value=True), \
+             patch("openstick.edl.flash_raw_emmc_via_edl", return_value=True) as mock_flash, \
+             patch("openstick.network.wait_for_debian_boot", return_value="192.168.5.1"), \
+             patch("openstick.network.ensure_stick_led_test", return_value=True), \
+             patch("openstick.network.get_stick_imei", return_value="868367079149880"), \
+             patch("sys.stdout", captured):
+            ok = handle_linux_install(CUSTOM_DEVICE, dry_run=False)
+
+        self.assertTrue(ok)
+        mock_prompt.assert_called_once()
+        mock_flash.assert_called_once()
+        self.assertIn("INSTALLING OPENSTICK LINUX (DEBIAN) CUSTOM LINUX IMAGE", captured.getvalue())
+
+    def test_handle_linux_install_custom_image_zip(self):
+        import zipfile
+        calib_dir, _, _, loader_path = self._prepare_mock_install_workspace()
+        custom_bin = self.test_dir / "full_emmc.bin"
+        create_synthetic_raw_image(custom_bin)
+        custom_zip = self.test_dir / "custom_firmware.zip"
+        with zipfile.ZipFile(custom_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(custom_bin, arcname="full_emmc.bin")
+
+        from openstick.devices import CUSTOM_DEVICE
+
+        captured = io.StringIO()
+        with patch("main.PROJECT_ROOT", self.test_dir), \
+             patch("openstick.edl.resolve_loader", return_value=loader_path), \
+             patch("openstick.edl.is_edl_connected", return_value=True), \
+             patch("openstick.edl.flash_raw_emmc_via_edl", return_value=True) as mock_flash, \
+             patch("openstick.network.wait_for_debian_boot", return_value="192.168.5.1"), \
+             patch("openstick.network.ensure_stick_led_test", return_value=True), \
+             patch("openstick.network.get_stick_imei", return_value="868367079149880"), \
+             patch("sys.stdout", captured):
+            ok = handle_linux_install(CUSTOM_DEVICE, dry_run=False, custom_image_path=str(custom_zip))
+
+        self.assertTrue(ok)
+        mock_flash.assert_called_once()
+        self.assertIn("INSTALLING OPENSTICK LINUX (DEBIAN) CUSTOM LINUX IMAGE", captured.getvalue())
 
 
 if __name__ == "__main__":

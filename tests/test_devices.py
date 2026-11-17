@@ -74,8 +74,23 @@ class TestDevices(unittest.TestCase):
         self.assertIsNotNone(dev3)
         self.assertEqual(dev3.id, "hmmifib")
 
+        dev4 = get_device_by_index(4)
+        self.assertIsNotNone(dev4)
+        self.assertEqual(dev4.id, "custom")
+
         self.assertIsNone(get_device_by_index(0))
         self.assertIsNone(get_device_by_index(99))
+
+    def test_get_custom_device_by_id_and_aliases(self):
+        dev = get_device_by_id("custom")
+        self.assertIsNotNone(dev)
+        self.assertEqual(dev.id, "custom")
+        self.assertEqual(dev.recommended_loader, "prog_emmc_firehose_8916.mbn")
+
+        for alias in ("custom-image", "custom_image", "other", "CUSTOM"):
+            resolved = get_device_by_id(alias)
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved.id, "custom")
 
 
 if __name__ == "__main__":

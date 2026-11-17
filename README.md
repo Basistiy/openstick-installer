@@ -71,16 +71,19 @@ Launch the installer using `run.bat` (Windows), `run.command` (macOS), or `./run
 
 ```mermaid
 flowchart TD
-    A["Launch run.command / run.bat / run.sh"] --> B["Select Board:\n[1] UZ801  |  [2] HMUF02  |  [3] HM-MIFIB  |  [4] Other"]
-    B -->|"[4] Other"| C["Prompt to open GitHub Issue\n& Exit"]
-    B -->|"[1] UZ801 / [2] HMUF02 / [3] HM-MIFIB"| D["Automatic Transition to EDL Mode\n(via fastboot oem reboot-edl, adb, or SSH)"]
+    A["Launch run.command / run.bat / run.sh"] --> B["Select Board:\n[1] UZ801  |  [2] HMUF02  |  [3] HM-MIFIB  |  [4] Custom image"]
+    B -->|"[1-3] Supported Boards\nor [4] Custom image"| D["Automatic Transition to EDL Mode\n(via fastboot oem reboot-edl, adb, or SSH)"]
     D --> E{"Backup Original Partitions?"}
     E -->|"Yes (Recommended)"| F["Full dump -> backups/<board>_<ts>_<imei>/full_emmc.bin\n+ Slices calibration sidecars -> calibration/*.bin"]
     E -->|"Skip"| G["Use existing calibration/*.bin"]
     F --> H["Propose Next Action:\n[1] Install Linux (Debian) [Recommended]\n[2] Restore Stock Backup\n[3] Create Sanitized Release Image\n[4] Exit"]
     G --> H
-    H -->|"[1] Install Linux"| I["1. Download universal image from GitHub Releases\n2. Inject calibration/*.bin into raw image in-place\n3. Flash with 'edl wf' & reboot ('edl reset')"]
-    I --> J["Stick boots into Debian Linux!\nAuto-detects IP: ssh user@192.168.5.1 (Password: 1)"]
+    H -->|"[1] Install Linux"| I{"Board Type?"}
+    I -->|"[1-3] Official Boards"| J["Download image from GitHub Releases"]
+    I -->|"[4] Custom image"| K["Prompt user for custom image path\n(.bin, .img, or .zip)"]
+    J --> L["Inject calibration/*.bin into raw image in-place\nFlash with 'edl wf' & reboot ('edl reset')"]
+    K --> L
+    L --> M["Stick boots into Debian Linux!\nAuto-detects IP: ssh user@192.168.5.1 (Password: 1)"]
 ```
 
 ---
@@ -159,6 +162,16 @@ This happens when `edl.py` attempts to connect via PyUSB / `libusb`, but Windows
 4. Select `QUSB_BULK` or `Qualcomm HS-USB QDLoader 9008` (`VID: 05C6, PID: 9008`).
 5. Select **WinUSB** (or **libusb-win32**) in the target driver field and click **Replace Driver**.
 6. Reconnect the stick and re-run `run.bat`.
+
+---
+
+## Custom Image Support
+
+If you have another MSM8916 board or want to flash a custom Linux image:
+1. Select **`[4] Custom image`** in the main menu (or run with `--custom-image <path>` or `--board custom`).
+2. The installer will prompt you to create a stock partition backup (`backups/custom_<ts>_<imei>/full_emmc.bin`) and extract unique calibration partitions (`calibration/`).
+3. When choosing **Install Linux**, the installer will ask for the path to your raw eMMC image (`.bin`, `.img`) or firmware archive (`.zip`).
+4. Your unique cellular calibration partitions will be injected in-place and flashed via Qualcomm 9008 EDL mode.
 
 ---
 

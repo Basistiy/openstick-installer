@@ -21,13 +21,15 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from openstick import __version__
 from openstick.bootstrap import ensure_environment
-from openstick.devices import get_device_by_id, get_supported_devices, DeviceModel
+from openstick.devices import get_device_by_id, get_supported_devices, DeviceModel, CUSTOM_DEVICE
+from openstick import ui
 from openstick.ui import (
     print_banner,
     show_flashing_warning,
     show_board_menu,
     show_device_info,
     prompt_backup_partitions,
+    prompt_custom_image_path,
     show_adb_guidance,
     show_backup_summary,
     show_action_menu,
@@ -332,10 +334,12 @@ def handle_linux_install(
     dry_run: bool = False,
     backup_dir: Optional[Path] = None,
     use_local: bool = False,
+    custom_image_path: Optional[str] = None,
 ) -> bool:
-    """Download general-purpose Linux image, inject calibration, and flash via EDL."""
+    """Download general-purpose Linux image (or prepare custom image), inject calibration, and flash via EDL."""
     print("\n" + "=" * 65)
-    print(f"       INSTALLING OPENSTICK LINUX (DEBIAN) FOR {device.name.split()[0].upper()}")
+    title_target = "CUSTOM LINUX IMAGE" if device.id == "custom" else f"FOR {device.name.split()[0].upper()}"
+    print(f"       INSTALLING OPENSTICK LINUX (DEBIAN) {title_target}")
     print("=" * 65)
     show_flashing_warning(mode="linux")
 
@@ -361,83 +365,100 @@ def handle_linux_install(
             print("    Please run the backup step or place your partition files into calibration/ first.", file=sys.stderr)
             return False
 
-    # 2. Fetch latest release from GitHub (with fallback or override to local dist/ package)
-    local_dist_zip = PROJECT_ROOT / "dist" / f"openstick-{device.id}-linux.zip"
-    extracted_dir: Optional[Path] = None
+    # 2. Image resolution: custom image vs. GitHub Release / local dist
+    raw_image: Optional[Path] = None
+    if device.id == "custom" or custom_image_path:
+        if not custom_image_path:
+            chosen_path = ui.prompt_custom_image_path(dry_run=dry_run)
+        else:
+            chosen_path = Path(custom_image_path).expanduser().resolve()
 
-    if use_local:
-        if local_dist_zip.is_file():
-            print(f"[+] Using local release package (--local): dist/{local_dist_zip.name}")
-            ok, extracted_dir = releases.extract_local_release_zip(local_dist_zip, PROJECT_ROOT)
-            if not ok or not extracted_dir:
-                print("[-] Failed extracting local Linux release package.", file=sys.stderr)
+        ok, raw_image = releases.prepare_custom_raw_image(
+            image_path=chosen_path,
+            project_root=PROJECT_ROOT,
+            dry_run=dry_run,
+        )
+        if not ok or not raw_image:
+            print("[-] Failed to prepare custom raw image for flashing.", file=sys.stderr)
+            return False
+    else:
+        # Fetch latest release from GitHub (with fallback or override to local dist/ package)
+        local_dist_zip = PROJECT_ROOT / "dist" / f"openstick-{device.id}-linux.zip"
+        extracted_dir: Optional[Path] = None
+
+        if use_local:
+            if local_dist_zip.is_file():
+                print(f"[+] Using local release package (--local): dist/{local_dist_zip.name}")
+                ok, extracted_dir = releases.extract_local_release_zip(local_dist_zip, PROJECT_ROOT)
+                if not ok or not extracted_dir:
+                    print("[-] Failed extracting local Linux release package.", file=sys.stderr)
+                    return False
+            else:
+                print(f"[-] Local release package not found: dist/{local_dist_zip.name}", file=sys.stderr)
+                return False
+        elif not dry_run:
+            print(f"[*] Fetching latest firmware releases from GitHub ({releases.DEFAULT_GITHUB_REPO})...")
+            release = releases.get_latest_release()
+            release_tag = release.get("tag_name", "latest") if release else None
+            if release_tag:
+                print(f"[+] Found release: '{release_tag}'")
+            asset = releases.find_matching_asset(release, device.id, mode="linux") if release else None
+
+            if asset and release_tag:
+                ok, extracted_dir = releases.download_and_extract_asset(
+                    asset=asset,
+                    tag_name=release_tag,
+                    project_root=PROJECT_ROOT,
+                    mode="linux",
+                    dry_run=False,
+                )
+                if not ok or not extracted_dir:
+                    print("[-] Failed downloading or extracting Linux release.", file=sys.stderr)
+                    return False
+            elif local_dist_zip.is_file():
+                print(f"[+] Using local release package: dist/{local_dist_zip.name}")
+                ok, extracted_dir = releases.extract_local_release_zip(local_dist_zip, PROJECT_ROOT)
+                if not ok or not extracted_dir:
+                    print("[-] Failed extracting local Linux release package.", file=sys.stderr)
+                    return False
+            else:
+                if not release:
+                    print("[-] Could not reach GitHub Releases API or no published releases found.", file=sys.stderr)
+                else:
+                    print(f"[-] No matching Linux image found in release '{release_tag}' for board '{device.id}'.", file=sys.stderr)
+                    print(
+                        f"    Expected asset name like: openstick-{device.id}-linux.zip or openstick-{device.id}-debian.zip",
+                        file=sys.stderr,
+                    )
                 return False
         else:
-            print(f"[-] Local release package not found: dist/{local_dist_zip.name}", file=sys.stderr)
-            return False
-    elif not dry_run:
-        print(f"[*] Fetching latest firmware releases from GitHub ({releases.DEFAULT_GITHUB_REPO})...")
-        release = releases.get_latest_release()
-        release_tag = release.get("tag_name", "latest") if release else None
-        if release_tag:
+            print(f"[DRY-RUN] Simulating GitHub Releases fetch ({releases.DEFAULT_GITHUB_REPO})...")
+            release_tag = "v0.1.0"
             print(f"[+] Found release: '{release_tag}'")
-        asset = releases.find_matching_asset(release, device.id, mode="linux") if release else None
-
-        if asset and release_tag:
+            asset = {"name": f"openstick-{device.id}-linux.zip", "browser_download_url": "mock://", "size": 150000000}
             ok, extracted_dir = releases.download_and_extract_asset(
                 asset=asset,
                 tag_name=release_tag,
                 project_root=PROJECT_ROOT,
                 mode="linux",
-                dry_run=False,
+                dry_run=True,
             )
             if not ok or not extracted_dir:
                 print("[-] Failed downloading or extracting Linux release.", file=sys.stderr)
                 return False
-        elif local_dist_zip.is_file():
-            print(f"[+] Using local release package: dist/{local_dist_zip.name}")
-            ok, extracted_dir = releases.extract_local_release_zip(local_dist_zip, PROJECT_ROOT)
-            if not ok or not extracted_dir:
-                print("[-] Failed extracting local Linux release package.", file=sys.stderr)
-                return False
-        else:
-            if not release:
-                print("[-] Could not reach GitHub Releases API or no published releases found.", file=sys.stderr)
-            else:
-                print(f"[-] No matching Linux image found in release '{release_tag}' for board '{device.id}'.", file=sys.stderr)
-                print(
-                    f"    Expected asset name like: openstick-{device.id}-linux.zip or openstick-{device.id}-debian.zip",
-                    file=sys.stderr,
-                )
-            return False
-    else:
-        print(f"[DRY-RUN] Simulating GitHub Releases fetch ({releases.DEFAULT_GITHUB_REPO})...")
-        release_tag = "v0.1.0"
-        print(f"[+] Found release: '{release_tag}'")
-        asset = {"name": f"openstick-{device.id}-linux.zip", "browser_download_url": "mock://", "size": 150000000}
-        ok, extracted_dir = releases.download_and_extract_asset(
-            asset=asset,
-            tag_name=release_tag,
-            project_root=PROJECT_ROOT,
-            mode="linux",
-            dry_run=True,
-        )
-        if not ok or not extracted_dir:
-            print("[-] Failed downloading or extracting Linux release.", file=sys.stderr)
+
+        # Locate raw eMMC image in extracted folder
+        raw_image = releases.find_raw_image_in_dir(extracted_dir)
+        if not raw_image and not dry_run:
+            print(f"[-] No raw eMMC image (full_emmc.bin) found inside {extracted_dir.name}.", file=sys.stderr)
             return False
 
-    # 5. Locate raw eMMC image in extracted folder
-    raw_image = releases.find_raw_image_in_dir(extracted_dir)
-    if not raw_image and not dry_run:
-        print(f"[-] No raw eMMC image (full_emmc.bin) found inside {extracted_dir.name}.", file=sys.stderr)
-        return False
+        if not raw_image and dry_run:
+            raw_image = extracted_dir / "full_emmc.bin"
+            if not raw_image.exists():
+                edl.create_synthetic_raw_image(raw_image)
 
-    if not raw_image and dry_run:
-        raw_image = extracted_dir / "full_emmc.bin"
-        if not raw_image.exists():
-            edl.create_synthetic_raw_image(raw_image)
-
-    # 6. Ensure device is in EDL mode
+    # 3. Ensure device is in EDL mode
     if not ensure_device_in_edl(device, dry_run=dry_run):
         print("[-] Device must be in Qualcomm 9008 EDL mode to flash.", file=sys.stderr)
         return False
@@ -687,7 +708,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Simulate execution without modifying hardware")
     parser.add_argument("--local", action="store_true", help="Use local firmware package from dist/ instead of downloading from GitHub Releases")
     parser.add_argument("--skip-bootstrap", action="store_true", help="Skip virtual environment bootstrap check")
-    parser.add_argument("--board", "--model", type=str, help=f"Specify board directly (e.g. {', '.join(supported_ids)})")
+    parser.add_argument("--board", "--model", type=str, help=f"Specify board directly (e.g. {', '.join(supported_ids)}, custom)")
+    parser.add_argument("--custom-image", type=str, help="Path to custom raw eMMC image (.bin, .img) or zip package to flash")
     parser.add_argument("--sanitize-image", type=str, help="Zero out unique partitions from a full_emmc.bin image")
     parser.add_argument("--create-release", action="store_true", help="Dump raw eMMC, sanitize, and package new release zip")
     parser.add_argument("--find", action="store_true", help="Scan network to find connected OpenStick running Linux")
@@ -710,7 +732,7 @@ def main():
         if args.board:
             dev = get_device_by_id(args.board)
             if not dev:
-                print(f"[-] Unknown board: '{args.board}'. Currently supporting: {supported_quoted}.", file=sys.stderr)
+                print(f"[-] Unknown board: '{args.board}'. Currently supporting: {supported_quoted}, or 'custom'.", file=sys.stderr)
                 sys.exit(1)
         else:
             dev = show_board_menu()
@@ -732,15 +754,16 @@ def main():
         return
 
     # Step 1: Board Selection
-    if args.board:
+    if args.custom_image and not args.board:
+        device = CUSTOM_DEVICE
+    elif args.board:
         device = get_device_by_id(args.board)
         if not device:
-            print(f"[-] Unknown board: '{args.board}'. Currently supporting: {supported_quoted}.", file=sys.stderr)
+            print(f"[-] Unknown board: '{args.board}'. Currently supporting: {supported_quoted}, or 'custom'.", file=sys.stderr)
             sys.exit(1)
     else:
         device = show_board_menu()
         if device is None:
-            # User chose "Other board" and received GitHub issue instructions
             sys.exit(0)
 
     show_device_info(device)
@@ -768,7 +791,13 @@ def main():
     # Step 3: Action Selection (Install Linux vs. Restore Stock Backup vs. Create Release vs. Exit)
     action = show_action_menu(device)
     if action == "linux":
-        handle_linux_install(device, dry_run=args.dry_run, backup_dir=backup_dir, use_local=args.local)
+        handle_linux_install(
+            device,
+            dry_run=args.dry_run,
+            backup_dir=backup_dir,
+            use_local=args.local,
+            custom_image_path=args.custom_image,
+        )
     elif action == "stock":
         handle_stock_recovery(device, dry_run=args.dry_run)
     elif action == "release":

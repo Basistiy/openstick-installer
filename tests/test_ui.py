@@ -13,10 +13,11 @@ from openstick.ui import (
     format_size,
     show_action_menu,
     prompt_backup_partitions,
+    prompt_custom_image_path,
     show_other_board_message,
     show_post_install_info,
 )
-from openstick.devices import get_device_by_id
+from openstick.devices import get_device_by_id, CUSTOM_DEVICE
 
 
 class TestUI(unittest.TestCase):
@@ -51,13 +52,21 @@ class TestUI(unittest.TestCase):
         self.assertEqual(dev.id, "hmmifib")
 
     @patch("builtins.input", return_value="4")
-    def test_show_board_menu_select_other(self, _):
-        # Capturing stdout to verify GitHub issue link is presented
+    def test_show_board_menu_select_custom(self, _):
+        dev = show_board_menu()
+        self.assertIsNotNone(dev)
+        self.assertEqual(dev.id, "custom")
+
+    @patch("builtins.input", return_value="custom")
+    def test_show_board_menu_select_custom_by_name(self, _):
+        dev = show_board_menu()
+        self.assertIsNotNone(dev)
+        self.assertEqual(dev.id, "custom")
+
+    def test_show_other_board_message(self):
         captured = io.StringIO()
         with patch("sys.stdout", captured):
-            dev = show_board_menu()
-
-        self.assertIsNone(dev)
+            show_other_board_message()
         output = captured.getvalue()
         self.assertIn("https://github.com/Basistiy/openstick-installer/issues", output)
         self.assertIn("BOARD SUPPORT REQUEST", output)
@@ -132,6 +141,24 @@ class TestUI(unittest.TestCase):
         self.assertIn("MSM8916 Linux Installer", output)
         self.assertIn("WARNING & DISCLAIMER", output)
         self.assertIn("NOT responsible", output)
+
+    def test_show_action_menu_custom(self):
+        captured = io.StringIO()
+        with patch("builtins.input", return_value="1"), patch("sys.stdout", captured):
+            action = show_action_menu(CUSTOM_DEVICE)
+        self.assertEqual(action, "linux")
+        self.assertIn("Flashes a custom raw eMMC Linux image", captured.getvalue())
+
+    @patch("builtins.input", return_value="~/my_custom_image.bin")
+    def test_prompt_custom_image_path_dry_run(self, _):
+        path = prompt_custom_image_path(dry_run=True)
+        self.assertEqual(path.name, "my_custom_image.bin")
+
+    @patch("builtins.input", return_value="q")
+    def test_prompt_custom_image_path_quit(self, _):
+        with self.assertRaises(SystemExit) as cm:
+            prompt_custom_image_path(dry_run=False)
+        self.assertEqual(cm.exception.code, 0)
 
     def test_show_post_install_info_hmmifib_shows_lcd_and_battery_tools(self):
         captured = io.StringIO()

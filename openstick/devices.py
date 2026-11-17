@@ -74,6 +74,27 @@ DEVICES: Dict[str, DeviceModel] = {
     ),
 }
 
+CUSTOM_DEVICE = DeviceModel(
+    id="custom",
+    name="Custom Image (MSM8916)",
+    description="Generic Qualcomm MSM8916 device using a user-provided custom Linux image.",
+    soc="Qualcomm MSM8916 (Snapdragon 410)",
+    ram="512MB / 1GB / 2GB LPDDR3",
+    storage="4GB / 8GB eMMC",
+    default_gateway="192.168.100.1 (or 192.168.5.1 / 192.168.68.1)",
+    adb_enable_url="http://192.168.100.1",
+    recommended_loader="prog_emmc_firehose_8916.mbn",
+    critical_partitions=["modemst1", "modemst2", "fsg", "fsc", "persist", "sec"],
+    notes=[
+        "Generic MSM8916 device flow with a custom raw eMMC Linux image (.bin or .zip).",
+        "Stock ADB: Connect PC to stick's Wi-Fi network and toggle USB debugging in the web panel.",
+        "Fastboot reboot command: fastboot oem reboot-edl transitions directly to EDL mode.",
+        "If soft-reboot to EDL fails: Hold physical recovery button or short EDL test pads while plugging into USB.",
+        "You will be asked for the path to your custom image when installing Linux.",
+        "Unique cellular calibration partitions will be backed up and injected into the custom image.",
+    ],
+)
+
 DEVICE_ALIASES: Dict[str, str] = {
     "uz801-v3": "uz801",
     "hmuf": "hmuf02",
@@ -81,6 +102,9 @@ DEVICE_ALIASES: Dict[str, str] = {
     "hm-mifib": "hmmifib",
     "mifib": "hmmifib",
     "mf800": "hmmifib",
+    "custom-image": "custom",
+    "custom_image": "custom",
+    "other": "custom",
 }
 
 
@@ -93,6 +117,8 @@ def get_device_by_id(device_id: str) -> Optional[DeviceModel]:
     """Retrieve device by its string identifier or alias (case-insensitive)."""
     key = device_id.lower().strip()
     key = DEVICE_ALIASES.get(key, key)
+    if key == "custom":
+        return CUSTOM_DEVICE
     return DEVICES.get(key)
 
 
@@ -101,4 +127,6 @@ def get_device_by_index(idx: int) -> Optional[DeviceModel]:
     keys = list(DEVICES.keys())
     if 1 <= idx <= len(keys):
         return DEVICES[keys[idx - 1]]
+    if idx == len(keys) + 1:
+        return CUSTOM_DEVICE
     return None

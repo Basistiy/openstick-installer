@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from openstick import __version__
 from openstick.devices import (
+    CUSTOM_DEVICE,
     DeviceModel,
     get_device_by_id,
     get_device_by_index,
@@ -55,46 +56,44 @@ def print_banner():
     print_disclaimer()
 
 
-def show_board_menu() -> Optional[DeviceModel]:
+def show_board_menu() -> DeviceModel:
     """
-    Display initial board selection menu for all supported devices plus 'Other board'.
-    Returns selected DeviceModel, or None if 'Other board' is selected.
+    Display initial board selection menu for all supported devices plus 'Custom image'.
+    Returns selected DeviceModel.
     """
     devices = list(get_supported_devices().values())
-    other_idx = len(devices) + 1
+    custom_idx = len(devices) + 1
 
     print("\n[+] Step 1: Select your target board")
     print("-" * 55)
     for idx, dev in enumerate(devices, start=1):
         print(f"  [{idx}] {dev.name} - Qualcomm MSM8916")
-    print(f"  [{other_idx}] Other board")
+    print(f"  [{custom_idx}] Custom image")
     print("-" * 55)
 
     while True:
         try:
-            choice = input(f"Please select board [1-{other_idx}] or 'q' to quit: ").strip().lower()
+            choice = input(f"Please select board [1-{custom_idx}] or 'q' to quit: ").strip().lower()
             if choice in ("q", "quit", "exit"):
                 print("Exiting.")
                 sys.exit(0)
 
             if choice.isdigit():
                 num = int(choice)
-                if num == other_idx:
-                    show_other_board_message()
-                    return None
+                if num == custom_idx:
+                    return CUSTOM_DEVICE
                 dev = get_device_by_index(num)
                 if dev is not None:
                     return dev
-            elif choice == "other":
-                show_other_board_message()
-                return None
+            elif choice in ("custom", "custom-image", "custom_image", "other"):
+                return CUSTOM_DEVICE
             else:
                 dev = get_device_by_id(choice)
                 if dev is not None:
                     return dev
 
             board_hints = ", ".join(f"{i} for {d.id.upper()}" for i, d in enumerate(devices, start=1))
-            print(f"[-] Invalid selection. Enter {board_hints}, or {other_idx} for Other.")
+            print(f"[-] Invalid selection. Enter {board_hints}, or {custom_idx} for Custom image.")
         except (KeyboardInterrupt, EOFError):
             print("\nAborted.")
             sys.exit(1)
@@ -230,13 +229,21 @@ def show_action_menu(device: DeviceModel) -> str:
     print("\n[+] Step 3: Choose Next Action")
     print("-" * 65)
     print("  [1] Install Linux (Debian) [Recommended]")
-    print(f"      Downloads universal Linux image for {device.name.split()[0]},")
-    print("      injects your unique calibration partitions, and flashes via EDL.")
+    if device.id == "custom":
+        print("      Flashes a custom raw eMMC Linux image (.bin or .zip),")
+        print("      injects your unique calibration partitions, and flashes via EDL.")
+    else:
+        print(f"      Downloads universal Linux image for {device.name.split()[0]},")
+        print("      injects your unique calibration partitions, and flashes via EDL.")
     print("  [2] Restore Stock Backup")
     print(f"      Flashes your original raw eMMC backup from backups/ to restore Android.")
     print("  [3] Create Sanitized Release Image (Dump from Stick & Clean)")
-    print(f"      Dumps raw eMMC from device, extracts calibration to calibration/,")
-    print(f"      cleans sensitive data, and packages dist/openstick-{device.id}-linux.zip.")
+    if device.id == "custom":
+        print("      Dumps raw eMMC from device, extracts calibration to calibration/,")
+        print("      cleans sensitive data, and packages dist/openstick-custom-linux.zip.")
+    else:
+        print(f"      Dumps raw eMMC from device, extracts calibration to calibration/,")
+        print(f"      cleans sensitive data, and packages dist/openstick-{device.id}-linux.zip.")
     print("  [4] Exit")
     print("-" * 65)
 
@@ -252,6 +259,60 @@ def show_action_menu(device: DeviceModel) -> str:
             elif choice in ("4", "3_legacy", "q", "quit", "exit"):
                 return "exit"
             print("[-] Invalid selection. Enter 1, 2, 3, or 4.")
+        except (KeyboardInterrupt, EOFError):
+            print("\nAborted.")
+            sys.exit(1)
+
+
+def prompt_custom_image_path(dry_run: bool = False) -> Path:
+    """
+    Prompt user to provide the file path to their custom Linux raw eMMC image or zip package.
+    Strips surrounding quotes and expands user paths (~).
+    """
+    print("\n" + "=" * 65)
+    print("                CUSTOM LINUX IMAGE SPECIFICATION")
+    print("=" * 65)
+    print("Please specify the path to your custom raw eMMC image or firmware package.")
+    print("Supported formats:")
+    print("  - Raw disk image (.bin, .img) containing a valid GPT partition table")
+    print("  - Firmware package (.zip) containing full_emmc.bin")
+    print("=" * 65)
+
+    while True:
+        try:
+            raw_input_path = input("\nEnter custom image path (or 'q' to cancel): ").strip()
+            if raw_input_path.lower() in ("q", "quit", "cancel"):
+                print("Aborted.")
+                sys.exit(0)
+
+            if not raw_input_path:
+                print("[-] Path cannot be empty.")
+                continue
+
+            # Strip quotes (common when dragging and dropping files in terminal)
+            cleaned = raw_input_path.strip("\"'")
+            candidate = Path(cleaned).expanduser().resolve()
+
+            if dry_run:
+                print(f"[DRY-RUN] Selected custom image path: {candidate}")
+                return candidate
+
+            if not candidate.exists():
+                print(f"[-] File not found: {candidate}")
+                continue
+
+            if candidate.is_file():
+                return candidate
+            elif candidate.is_dir():
+                from openstick.releases import find_raw_image_in_dir
+                raw_in_dir = find_raw_image_in_dir(candidate)
+                if raw_in_dir:
+                    print(f"[+] Found raw eMMC image: {raw_in_dir.name}")
+                    return raw_in_dir
+                print(f"[-] Path is a directory: {candidate}. Please specify a .bin, .img, or .zip file.")
+                continue
+            else:
+                print(f"[-] Invalid file path: {candidate}")
         except (KeyboardInterrupt, EOFError):
             print("\nAborted.")
             sys.exit(1)
