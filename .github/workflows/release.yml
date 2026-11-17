@@ -66,12 +66,8 @@ jobs:
             asset_name="openstick-${board}-linux.zip"
             dest_path="dist/${asset_name}"
             if [ ! -f "${dest_path}" ]; then
-              if [ "${board}" = "uz801" ]; then
-                echo "[*] Using known-good clean uz801 firmware image from v0.0.1 release..."
-                download_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v0.0.1/openstick-uz801-linux.zip"
-              else
-                echo "[*] Looking up latest published ${asset_name} across GitHub Releases..."
-                download_url=$(python3 - "${asset_name}" << 'PY'
+              echo "[*] Looking up latest published ${asset_name} across GitHub Releases..."
+              download_url=$(python3 - "${asset_name}" << 'PY'
           import json, os, sys, urllib.request
           target = sys.argv[1]
           repo = os.environ.get("GITHUB_REPOSITORY", "Basistiy/openstick-installer")
@@ -85,6 +81,9 @@ jobs:
                   for rel in json.loads(resp.read().decode()):
                       if rel.get("draft"):
                           continue
+                      # Do not carry forward old oversized UZ801 images from v0.0.5 or earlier
+                      if target == "openstick-uz801-linux.zip" and rel.get("tag_name") in ("v0.0.1", "v0.0.2", "v0.0.3", "v0.0.4", "v0.0.5"):
+                          continue
                       for asset in rel.get("assets", []):
                           if asset.get("name") == target and asset.get("browser_download_url"):
                               print(asset["browser_download_url"])
@@ -92,8 +91,7 @@ jobs:
           except Exception:
               pass
           PY
-                )
-              fi
+              )
               if [ -n "${download_url}" ]; then
                 echo "[*] Fetching ${asset_name} from ${download_url}..."
                 curl -fSL "${download_url}" -o "${dest_path}" || rm -f "${dest_path}"

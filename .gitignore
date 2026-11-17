@@ -192,3 +192,5 @@ loaders/*.mbn
 loaders/*.elf
 edl/
 *.part
+scripts/shrink_image.py
+
