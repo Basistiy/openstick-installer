@@ -91,6 +91,17 @@ def ensure_device_in_edl(device: DeviceModel, dry_run: bool = False) -> bool:
                 print("[-] Fastboot reboot command sent, but EDL device was not detected within timeout.")
             else:
                 print("[-] Failed to issue reboot command via Fastboot.")
+        elif fastboot.is_fastboot_usb_connected():
+            print("\n" + "=" * 70, file=sys.stderr)
+            print("[!] FASTBOOT USB DEVICE DETECTED (05C6:9091), BUT DRIVER NOT BOUND", file=sys.stderr)
+            print("=" * 70, file=sys.stderr)
+            print("The device is in bootloader/fastboot mode (USB 05C6:9091), but 'fastboot devices'", file=sys.stderr)
+            print("cannot see it because the host OS (e.g. Windows) has no driver bound to this interface.", file=sys.stderr)
+            print("\nRecommended remedies:", file=sys.stderr)
+            print("  1. Hardware Reset Button: Unplug the stick, hold down the physical reset button", file=sys.stderr)
+            print("     while plugging it into USB to land in Qualcomm 9008 EDL mode directly.", file=sys.stderr)
+            print("  2. Or use Zadig (https://zadig.akeo.ie) to install 'WinUSB' on device 05C6:9091.", file=sys.stderr)
+            print("=" * 70 + "\n", file=sys.stderr)
 
         # 3. ADB mode check
         adb_devices = [d for d in adb.get_adb_devices() if d.is_ready]
@@ -125,6 +136,9 @@ def ensure_device_in_edl(device: DeviceModel, dry_run: bool = False) -> bool:
                 if fastboot.reboot_to_edl(fb_dev.serial, dry_run=dry_run):
                     if edl.wait_for_edl(timeout=30, dry_run=dry_run):
                         return True
+            elif fastboot.is_fastboot_usb_connected():
+                print("\n[!] Device entered Fastboot mode (USB 05C6:9091), but host has no fastboot driver bound.")
+                print("    Unplug the stick, hold the physical reset button while plugging into USB to enter 9008 directly.")
 
             # If still not in EDL or Fastboot, try explicit adb reboot bootloader
             print("[*] Trying 'adb reboot bootloader'...")
@@ -136,6 +150,9 @@ def ensure_device_in_edl(device: DeviceModel, dry_run: bool = False) -> bool:
                 if fastboot.reboot_to_edl(fb_dev.serial, dry_run=dry_run):
                     if edl.wait_for_edl(timeout=30, dry_run=dry_run):
                         return True
+            elif fastboot.is_fastboot_usb_connected():
+                print("\n[!] Device entered Fastboot mode (USB 05C6:9091), but host has no fastboot driver bound.")
+                print("    Unplug the stick, hold the physical reset button while plugging into USB to enter 9008 directly.")
 
         # 4. OpenStick Linux (SSH) check
         stick = network.find_stick_device(dry_run=dry_run)
@@ -762,7 +779,20 @@ def main():
     if do_backup:
         backup_ok, backup_dir = handle_partition_backup(device, dry_run=args.dry_run)
         if not backup_ok:
-            print("[!] Backup completed with warnings or failed. Check the logs above.")
+            print("\n" + "!" * 65, file=sys.stderr)
+            print(" [!] CRITICAL WARNING: Partition backup failed or was interrupted!", file=sys.stderr)
+            print("     Flashing without a verified backup risks PERMANENTLY losing", file=sys.stderr)
+            print("     unique cellular calibration and modem IMEI data.", file=sys.stderr)
+            print("!" * 65 + "\n", file=sys.stderr)
+            if not args.dry_run:
+                try:
+                    proceed = input("Do you want to ABORT to protect your device? (Recommended) [Y/n]: ").strip().lower()
+                    if not proceed or proceed in ("y", "yes"):
+                        print("\n[+] Aborting to protect device. Fix the backup issue before flashing.")
+                        sys.exit(1)
+                except (KeyboardInterrupt, EOFError):
+                    print("\nAborted.")
+                    sys.exit(1)
         else:
             print("[+] Backup finished successfully!")
     else:

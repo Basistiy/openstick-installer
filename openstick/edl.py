@@ -207,7 +207,11 @@ def run_edl_command(args: List[str], loader: Optional[Path] = None, dry_run: boo
         print("[-] EDL tool (bkerler/edl) not found.", file=sys.stderr)
         return False
 
-    cmd = list(edl_cmd) + list(args)
+    cmd = list(edl_cmd)
+    if len(cmd) >= 1 and Path(cmd[0]).stem.lower().startswith("python"):
+        if "-X" not in cmd:
+            cmd[1:1] = ["-X", "utf8"]
+    cmd.extend(list(args))
     storage_cmds = {
         "printgpt", "gpt", "r", "rl", "rf", "rs",
         "w", "wl", "wf", "ws", "e", "es", "ep",
@@ -219,6 +223,8 @@ def run_edl_command(args: List[str], loader: Optional[Path] = None, dry_run: boo
         cmd.append(f"--loader={loader}")
 
     env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     edl_dir = Path(__file__).resolve().parent.parent / "edl"
     if edl_dir.exists():
         env["PYTHONPATH"] = str(edl_dir) + os.pathsep + env.get("PYTHONPATH", "")
@@ -326,6 +332,31 @@ def run_edl_command(args: List[str], loader: Optional[Path] = None, dry_run: boo
             print("  5. In the target driver selector (right of arrow), select 'WinUSB' (or 'libusb-win32')", file=sys.stderr)
             print("  6. Click 'Replace Driver' (or 'Install Driver')", file=sys.stderr)
             print("  7. Unplug the stick, plug it back in, and rerun run.bat", file=sys.stderr)
+            print("=" * 70 + "\n", file=sys.stderr)
+        elif (
+            "No backend available" in combined_out
+            or "NoBackendError" in combined_out
+        ):
+            print("\n" + "=" * 70, file=sys.stderr)
+            print("[!] LIBUSB BACKEND MISSING (Windows)", file=sys.stderr)
+            print("=" * 70, file=sys.stderr)
+            print("PyUSB cannot find a valid libusb-1.0 DLL backend on your system.", file=sys.stderr)
+            print("Please ensure 'libusb' is installed in your Python environment: pip install libusb", file=sys.stderr)
+            print("=" * 70 + "\n", file=sys.stderr)
+        elif (
+            "Mode detected: error" in combined_out
+            or "Error on sahara handshake" in combined_out
+            or ("Connection detected, quiting" in combined_out and "Mode detected" in combined_out)
+        ):
+            print("\n" + "=" * 70, file=sys.stderr)
+            print("[!] QUALCOMM FIREHOSE / SAHARA HANDSHAKE ERROR DETECTED", file=sys.stderr)
+            print("=" * 70, file=sys.stderr)
+            print("The device is still executing the Firehose programmer in RAM from a previous", file=sys.stderr)
+            print("operation or interrupted step, and is no longer responding to Sahara handshake.", file=sys.stderr)
+            print("\nTo fix this:", file=sys.stderr)
+            print("  1. Unplug the USB stick from your computer.", file=sys.stderr)
+            print("  2. Hold down the physical reset/recovery button while plugging it back in.", file=sys.stderr)
+            print("  3. Release the button after 3 seconds (device enters clean 9008 EDL).", file=sys.stderr)
             print("=" * 70 + "\n", file=sys.stderr)
         else:
             print(f"[-] EDL command failed: {err_msg}", file=sys.stderr)
@@ -442,19 +473,41 @@ def extract_partitions_from_raw_image(
         return False
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    image_size = image_path.stat().st_size
+    all_success = True
 
     with open(image_path, "rb") as f:
         for part_name in partitions:
             if part_name not in gpt:
                 continue
             info = gpt[part_name]
-            f.seek(info["byte_offset"])
-            data = f.read(info["byte_size"])
+            required_size = info["byte_size"]
+            offset = info["byte_offset"]
+
+            if offset + required_size > image_size:
+                print(
+                    f"[-] Image {image_path.name} is truncated or partition {part_name} extends "
+                    f"beyond file size ({offset + required_size} > {image_size}). Refusing to write empty partition.",
+                    file=sys.stderr,
+                )
+                all_success = False
+                continue
+
+            f.seek(offset)
+            data = f.read(required_size)
+
+            if len(data) != required_size or len(data) == 0:
+                print(
+                    f"[-] Incomplete read for partition {part_name} ({len(data)}/{required_size} bytes). Skipping.",
+                    file=sys.stderr,
+                )
+                all_success = False
+                continue
 
             out_file = output_dir / f"{part_name}.bin"
             out_file.write_bytes(data)
 
-    return True
+    return all_success
 
 
 def sanitize_raw_image(
@@ -760,7 +813,15 @@ def inject_partitions_into_raw_image(
                 if img_candidate.exists():
                     source_file = img_candidate
 
-            if not source_file.exists() or source_file.stat().st_size == 0:
+            if not source_file.exists():
+                continue
+
+            if source_file.stat().st_size == 0:
+                print(f"[!] Warning: {source_file.name} is 0 bytes (empty). Skipping injection.", file=sys.stderr)
+                continue
+
+            if part_name != "fsc" and not _is_file_non_zero(source_file):
+                print(f"[!] Warning: {source_file.name} contains only zero bytes (sanitized/blank). Skipping injection.", file=sys.stderr)
                 continue
 
             part_bytes = source_file.read_bytes()
@@ -833,12 +894,33 @@ def execute_raw_emmc_backup(
         print("[-] Full eMMC clone failed or was cancelled.", file=sys.stderr)
         return False
 
+    # Verify that the dumped image has valid GPT and is not truncated
+    try:
+        gpt = parse_gpt_from_raw_image(image_path)
+        min_required = max(
+            (info["byte_offset"] + info["byte_size"] for k, info in gpt.items() if k != "__metadata__"),
+            default=0,
+        )
+        if image_path.stat().st_size < min_required:
+            print(
+                f"[-] Dumped eMMC image is truncated ({image_path.stat().st_size} bytes < {min_required} required bytes).",
+                file=sys.stderr,
+            )
+            return False
+    except Exception as e:
+        print(f"[-] GPT validation error on dumped eMMC image: {e}", file=sys.stderr)
+        return False
+
     print("[*] Automatically extracting calibration sidecars from raw eMMC dump...")
     archived_calib = backup_dir / "calibration"
-    extract_partitions_from_raw_image(image_path, archived_calib)
+    if not extract_partitions_from_raw_image(image_path, archived_calib):
+        print("[-] Failed extracting calibration sidecars from raw image.", file=sys.stderr)
+        return False
 
     if calibration_dir:
-        extract_partitions_from_raw_image(image_path, calibration_dir)
+        if not extract_partitions_from_raw_image(image_path, calibration_dir):
+            print("[-] Failed extracting calibration partitions to active calibration directory.", file=sys.stderr)
+            return False
         print(f"[+] Unique device calibration files extracted to: {calibration_dir}")
 
     return True
@@ -1049,8 +1131,25 @@ def flash_raw_emmc_via_edl(
             calibration_dir=calibration_dir,
             dry_run=dry_run,
         )
+        if not ok:
+            print("[-] Calibration injection failed.", file=sys.stderr)
+            return False
         if ok and injected:
             print(f"[+] Successfully injected {len(injected)} partitions: {', '.join(injected)}")
+
+        if not dry_run:
+            try:
+                target_gpt = parse_gpt_from_raw_image(image_path)
+                missing_crit = [p for p in DEFAULT_CALIBRATION_PARTITIONS if p in target_gpt and p not in injected]
+                if missing_crit:
+                    print(
+                        f"[-] Safety check failed: Critical calibration partitions missing from injection: {', '.join(missing_crit)}",
+                        file=sys.stderr,
+                    )
+                    print("    Refusing to flash to prevent erasing modem IMEI or RF calibration.", file=sys.stderr)
+                    return False
+            except Exception as e:
+                print(f"[!] Warning: Could not verify target image GPT: {e}", file=sys.stderr)
 
     print(f"\n[*] Flashing raw eMMC image to stick: {image_path.name}...")
     flash_ok = run_edl_command(["wf", str(image_path)], loader=loader, dry_run=dry_run, timeout=2400)
@@ -1157,11 +1256,19 @@ def find_latest_valid_backup(
             continue
 
         is_stock_layout = False
+        min_required = 0
         try:
             gpt = parse_gpt_from_raw_image(img)
             if _is_raw_image_sanitized(img, gpt):
                 continue
             is_stock_layout = "system" in gpt
+            min_required = max(
+                (info["byte_offset"] + info["byte_size"] for k, info in gpt.items() if k != "__metadata__"),
+                default=0,
+            )
+            if min_required > 0 and img.stat().st_size < min_required:
+                # Raw image is truncated / incomplete dump
+                continue
         except Exception:
             # Allow minimal test files without full GPT if calibration sidecars aren't zeroed
             pass

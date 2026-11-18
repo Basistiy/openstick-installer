@@ -7,8 +7,23 @@ Cross-platform, minimal-action installation and flashing tool for the OpenStick 
 ## Supported Models
 
 - **UZ801** (`UZ801` / `UZ801-V3`) — Qualcomm MSM8916 4G LTE USB Modem Dongle
-- **HMUF02** (`HMUF02` / `HMUF02-V05`) — Qualcomm MSM8916 4G LTE Wi-Fi USB Modem Dongle
+- **HMUF02** (`HMUF02` / `HMUF02-V05` / `zbx002` / `UF05`) — Qualcomm MSM8916 4G LTE Wi-Fi USB Modem Dongle
 - **HM-MIFIB** (`HM-MIFIB` / `MF800`) — Qualcomm MSM8916 4G LTE Mobile Wi-Fi Router with Battery & 128×128 LCD
+
+### Device Identification: UZ801 vs. HMUF02-V05 (`zbx002`)
+
+Many white 4G LTE USB dongles share identical casing, MSM8916 Snapdragon 410 SoC, 512 MB RAM, and 4 GB eMMC. When reading properties from stock Android over ADB (`adb shell getprop`):
+
+| Property | UZ801 | HMUF02-V05 (`zbx002`) |
+| --- | --- | --- |
+| `ro.product.model` | `UZ801` | `UFI` |
+| `ro.product.manufacturer` | `Qualcomm Technology` | `HiMI` |
+| PCB Silkscreen | `UZ801_...` | `UF05 251208V05` / `zbx002` |
+| Build Target | `msm8916_32_512-userdebug` | `msm8916_32_512-userdebug` |
+| Target Profile | `uz801` | `hmuf02` |
+
+> [!TIP]
+> Notice that HMUF02 reports `ro.product.model = UFI`, **not** `HMUF02`. The reliable software differentiator is `ro.product.manufacturer = HiMI`. Stock firmware often has ADB enabled out of the box (no web toggle required).
 
 ---
 
@@ -162,6 +177,38 @@ This happens when `edl.py` attempts to connect via PyUSB / `libusb`, but Windows
 4. Select `QUSB_BULK` or `Qualcomm HS-USB QDLoader 9008` (`VID: 05C6, PID: 9008`).
 5. Select **WinUSB** (or **libusb-win32**) in the target driver field and click **Replace Driver**.
 6. Reconnect the stick and re-run `run.bat`.
+
+### Windows: Fastboot `05C6:9091` Missing Driver
+When using `adb reboot edl`, some sticks reboot into Fastboot bootloader mode (`05c6:9091`). If Windows does not have an Android bootloader driver installed, `fastboot devices` will remain empty.
+- **Fix**: The simplest and most reliable method is hardware EDL: unplug the stick, hold down the physical recovery/reset button, and plug it into USB. This enters Qualcomm 9008 mode directly and bypasses all Fastboot driver issues.
+
+### Windows: Qualcomm Sahara `Mode detected: error`
+If an EDL operation is interrupted or immediately after a full dump completes, the device remains executing the Firehose loader in RAM and will not respond to a new Sahara handshake.
+- **Fix**: Unplug the stick from USB, hold down the reset button, and plug it back in to reboot into a fresh 9008 state.
+
+---
+
+## HMUF02-V05 (`zbx002`) Hardware Quirks & Debian Post-Install
+
+1. **No RTC Clock Skew (`apt` signature verification failure)**:
+   The dongle has no real-time clock (RTC) battery, causing its clock to initialize in 1970 or weeks in the past. On first boot, `apt-get update` may fail with:
+   ```text
+   Sub-process /usr/bin/sqv returned an error code (1) ... Verifying signature: Not live until ...
+   ```
+   **Fix**: Set the current UTC date and time manually or connect to Wi-Fi/NTP:
+   ```bash
+   sudo date -u -s "2026-11-18 12:00:00"
+   sudo apt-get update
+   ```
+
+2. **Safe Shutdown: Use `halt`, not `poweroff`**:
+   Because the stick is bus-powered, running `systemctl poweroff` instructs the PMIC to cut power, but continuous USB 5V VBUS causes the SoC to reboot ~15 seconds later. If you unplug the stick after `poweroff`, you risk pulling the stick while Debian is booting with a read-write filesystem.
+   - **Always run `sudo systemctl halt`** to cleanly unmount filesystems and halt the SoC before unplugging.
+
+3. **LED Sysfs Inversion & State Service**:
+   - Physical LEDs are connected to GPIO 71 (Green), GPIO 72 (Red), GPIO 73 (Blue). Shipped `/usr/local/bin/led-test` verifies this routing.
+   - In the device tree, labels are semantically inverted: `green:wlan` actually maps to the mobile cellular network (WAN), and `blue:wan` maps to WiFi (WLAN).
+   - Shipped Debian images do not auto-drive LEDs by default. You can deploy a systemd service that monitors NetworkManager device states to drive steady red for power, blue for WiFi AP, and green for 4G LTE.
 
 ---
 

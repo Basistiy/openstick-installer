@@ -30,7 +30,7 @@ class TestDevices(unittest.TestCase):
         for part in ("modemst1", "modemst2", "fsg", "fsc", "persist", "sec"):
             self.assertIn(part, dev.critical_partitions)
 
-        for alias in ("HMUF02", "hmuf", "HMUF02-V05"):
+        for alias in ("HMUF02", "hmuf", "HMUF02-V05", "zbx002", "ZBX002", "uf05"):
             resolved = get_device_by_id(alias)
             self.assertIsNotNone(resolved)
             self.assertEqual(resolved.id, "hmuf02")

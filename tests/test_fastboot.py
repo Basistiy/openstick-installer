@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 from openstick.fastboot import (
     FastbootDevice,
     is_fastboot_available,
+    is_fastboot_usb_connected,
     get_fastboot_devices,
     wait_for_device,
     reboot_to_edl,
@@ -91,6 +92,17 @@ class TestFastboot(unittest.TestCase):
             text=True,
             timeout=10,
         )
+
+    @patch("usb.core.find")
+    def test_is_fastboot_usb_connected_pyusb(self, mock_find):
+        mock_find.return_value = MagicMock()
+        self.assertTrue(is_fastboot_usb_connected())
+
+        mock_find.return_value = None
+        with patch("serial.tools.list_ports.comports", return_value=[]):
+            with patch("sys.platform", "linux"):
+                with patch("shutil.which", return_value=None):
+                    self.assertFalse(is_fastboot_usb_connected())
 
 
 if __name__ == "__main__":
