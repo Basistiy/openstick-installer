@@ -204,7 +204,10 @@ def show_backup_summary(report: dict, calibration_dir: Optional[Path] = None):
     print(f"  - Backup Directory:   {report.get('directory')}")
     if report.get("imei"):
         print(f"  - Modem IMEI:         {report.get('imei')}")
-    print(f"  - Full eMMC Clone:    {report.get('image_file')} ({report.get('image_size_gb')} GB)")
+    actual_gb = report.get('image_size_gb', 0.0)
+    gpt_total = report.get('gpt_total_bytes', 0)
+    gpt_str = f" / {format_size(gpt_total)} eMMC" if gpt_total > 0 else ""
+    print(f"  - Full eMMC Clone:    {report.get('image_file')} ({actual_gb} GB{gpt_str})")
     print(f"  - Total Partitions:   {report.get('gpt_partitions_count')}")
     if calibration_dir:
         print(f"  - Active Calibration: {calibration_dir.resolve()}")
