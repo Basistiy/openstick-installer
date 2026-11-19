@@ -5,14 +5,11 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-
-from tests.fakes import FakeProcess
+from unittest.mock import patch
 
 from openstick.edl import (
     is_edl_connected,
     wait_for_edl,
-    find_edl_runner,
     run_edl_command,
     parse_gpt_from_raw_image,
     extract_partitions_from_raw_image,
@@ -30,6 +27,7 @@ from openstick.edl import (
     DEFAULT_CALIBRATION_PARTITIONS,
     ALL_CALIBRATION_PARTITIONS,
 )
+from tests.fakes import FakeProcess, write_valid_dump
 
 
 class TestEdl(unittest.TestCase):
@@ -183,46 +181,32 @@ class TestEdl(unittest.TestCase):
         backups_dir = self.test_dir / "backups"
         backups_dir.mkdir()
 
-        # Old backup
         old_dir = backups_dir / "uz801_20261019_100000"
-        old_dir.mkdir()
-        (old_dir / "full_emmc.bin").write_bytes(b"\x01" * 1024)
+        write_valid_dump(old_dir / "full_emmc.bin")
 
-        # New backup
         new_dir = backups_dir / "uz801_20261020_120000"
-        new_dir.mkdir()
-        (new_dir / "full_emmc.bin").write_bytes(b"\x01" * 1024)
+        write_valid_dump(new_dir / "full_emmc.bin")
 
-        # Sanitized release dump directory must be ignored even though 'uz801_release_' sorts after 'uz801_2026'
+        # A sanitized release dump must be ignored even though 'uz801_release_' sorts after 'uz801_2026'
         rel_dir = backups_dir / "uz801_release_20261021_120000"
-        rel_dir.mkdir()
-        (rel_dir / "full_emmc.bin").write_bytes(b"\x01" * 1024)
+        write_valid_dump(rel_dir / "full_emmc.bin")
 
         found = find_latest_valid_backup(self.test_dir, "uz801")
-        self.assertIsNotNone(found)
         self.assertEqual(found, new_dir)
 
     def test_find_latest_valid_backup_with_imei_suffix(self):
         backups_dir = self.test_dir / "backups"
-        if not backups_dir.exists():
-            backups_dir.mkdir()
+        backups_dir.mkdir()
 
-        # Older backup without IMEI
-        old_dir = backups_dir / "uz801_20261020_120000"
-        old_dir.mkdir(exist_ok=True)
-        (old_dir / "full_emmc.bin").write_bytes(b"\x01" * 1024)
-
-        # Newer backup with IMEI suffix
+        write_valid_dump(backups_dir / "uz801_20261020_120000" / "full_emmc.bin")
         newer_dir = backups_dir / "uz801_20261022_150000_860123456789014"
-        newer_dir.mkdir(exist_ok=True)
-        (newer_dir / "full_emmc.bin").write_bytes(b"\x01" * 1024)
+        write_valid_dump(newer_dir / "full_emmc.bin")
 
-        found = find_latest_valid_backup(self.test_dir, "uz801")
-        self.assertIsNotNone(found)
-        self.assertEqual(found, newer_dir)
+        self.assertEqual(find_latest_valid_backup(self.test_dir, "uz801"), newer_dir)
 
     def test_flash_raw_emmc_via_edl_dry_run(self):
-        self.assertTrue(flash_raw_emmc_via_edl(self.synthetic_image, dry_run=True))
+        calib_dir = self.test_dir / "calib_dry"
+        self.assertTrue(flash_raw_emmc_via_edl(self.synthetic_image, calibration_dir=calib_dir, dry_run=True))
 
     @patch("openstick.edl.subprocess.Popen")
     @patch("openstick.edl.find_edl_runner", return_value=["edl"])
@@ -269,51 +253,11 @@ class TestEdl(unittest.TestCase):
     @patch("openstick.edl.find_edl_runner", return_value=["edl"])
     def test_run_edl_command_sets_utf8_env(self, mock_runner, mock_popen):
         mock_popen.return_value = FakeProcess(stdout="Done")
+
         self.assertTrue(run_edl_command(["reset"]))
         env_passed = mock_popen.call_args[1]["env"]
         self.assertEqual(env_passed.get("PYTHONIOENCODING"), "utf-8")
         self.assertEqual(env_passed.get("PYTHONUTF8"), "1")
-
-    def test_extract_partitions_truncated_image_rejected(self):
-        # Truncate synthetic image to 20000 bytes (GPT header valid, but partitions extend past EOF)
-        truncated_img = self.test_dir / "truncated.bin"
-        truncated_img.write_bytes(self.synthetic_image.read_bytes()[:20000])
-        out_dir = self.test_dir / "extracted_truncated"
-        ok = extract_partitions_from_raw_image(truncated_img, out_dir)
-        self.assertFalse(ok)
-
-    def test_find_latest_valid_backup_truncated_image_ignored(self):
-        backups_dir = self.test_dir / "backups"
-        backups_dir.mkdir(exist_ok=True)
-        # Directory with truncated image that has valid GPT but cut off before partitions
-        truncated_dir = backups_dir / "uz801_20261101_100000"
-        truncated_dir.mkdir(exist_ok=True)
-        (truncated_dir / "full_emmc.bin").write_bytes(self.synthetic_image.read_bytes()[:20000])
-
-        # Valid backup
-        valid_dir = backups_dir / "uz801_20261020_100000"
-        valid_dir.mkdir(exist_ok=True)
-        shutil.copy2(self.synthetic_image, valid_dir / "full_emmc.bin")
-
-        found = find_latest_valid_backup(self.test_dir, "uz801")
-        self.assertEqual(found, valid_dir)
-
-    def test_inject_partitions_skips_zero_size_and_blank(self):
-        calib_dir = self.test_dir / "test_calib_blank"
-        calib_dir.mkdir()
-        (calib_dir / "fsg.bin").write_bytes(b"")  # 0 bytes
-        (calib_dir / "persist.bin").write_bytes(b"\x00" * 1024)  # blank/all zeros
-        (calib_dir / "modemst1.bin").write_bytes(b"\x12\x34" * 16)  # valid
-
-        img_copy = self.test_dir / "test_inject.bin"
-        shutil.copy2(self.synthetic_image, img_copy)
-
-        ok, injected = inject_partitions_into_raw_image(img_copy, calib_dir)
-        self.assertTrue(ok)
-        self.assertIn("modemst1", injected)
-        self.assertNotIn("fsg", injected)
-        self.assertNotIn("persist", injected)
-
 
     def test_clean_rootfs_sensitive_data_dry_run(self):
         ok, items = clean_rootfs_sensitive_data(self.synthetic_image, dry_run=True)

@@ -1,5 +1,13 @@
 """Shared stand-ins used by the tests."""
 
+from openstick.edl import create_synthetic_raw_image
+
+
+def write_valid_dump(path) -> int:
+    """Write a synthetic eMMC dump whose GPT agrees with its real size; return its sectors."""
+    create_synthetic_raw_image(path)
+    return path.stat().st_size // 512
+
 
 class FakeProcess:
     """Minimal subprocess.Popen lookalike; `interrupt` makes communicate raise Ctrl-C."""

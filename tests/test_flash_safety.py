@@ -90,12 +90,12 @@ class TestFlashSafety(unittest.TestCase):
         self.assertFalse(ok)
         self.assertNotIn("wf", stick.calls)
 
-    def test_flash_uses_given_device_size(self):
-        stick = FakeStick(DEVICE_SECTORS, self.stock)
-        with patch("openstick.edl.run_edl_command", side_effect=stick.run_edl_command):
-            ok = flash_raw_emmc_via_edl(self.large, inject_calibration=False, device_sectors=DEVICE_SECTORS)
+    def test_flash_refuses_injection_without_calibration_dir(self):
+        with patch("openstick.edl.run_edl_command") as mock_edl:
+            ok = flash_raw_emmc_via_edl(self.small, inject_calibration=True, device_sectors=DEVICE_SECTORS)
+
         self.assertFalse(ok)
-        self.assertNotIn("wf", stick.calls)
+        mock_edl.assert_not_called()
 
     def test_flash_detects_write_that_reported_success(self):
         stick = FakeStick(DEVICE_SECTORS, self.stock, write_succeeds=False)
