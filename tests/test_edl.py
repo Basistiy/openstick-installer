@@ -1,10 +1,13 @@
 """Tests for Qualcomm EDL engine, GPT parsing, sanitization, and calibration injection."""
 
+import io
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+
+from tests.fakes import FakeProcess
 
 from openstick.edl import (
     is_edl_connected,
@@ -221,51 +224,53 @@ class TestEdl(unittest.TestCase):
     def test_flash_raw_emmc_via_edl_dry_run(self):
         self.assertTrue(flash_raw_emmc_via_edl(self.synthetic_image, dry_run=True))
 
-    @patch("openstick.edl.subprocess.run")
+    @patch("openstick.edl.subprocess.Popen")
     @patch("openstick.edl.find_edl_runner", return_value=["edl"])
-    def test_run_edl_command_memory_flag_handling(self, mock_runner, mock_subproc):
-        mock_subproc.return_value = MagicMock(returncode=0, stdout="Done", stderr="")
+    def test_run_edl_command_memory_flag_handling(self, mock_runner, mock_popen):
+        mock_popen.return_value = FakeProcess(stdout="Done")
 
         # Storage command 'wf' should include --memory=eMMC
         self.assertTrue(run_edl_command(["wf", "full_emmc.bin"]))
-        wf_cmd = mock_subproc.call_args_list[-1][0][0]
+        wf_cmd = mock_popen.call_args_list[-1][0][0]
         self.assertIn("--memory=eMMC", wf_cmd)
 
         # Control command 'reset' must NOT include --memory=eMMC
         self.assertTrue(run_edl_command(["reset"]))
-        reset_cmd = mock_subproc.call_args_list[-1][0][0]
+        reset_cmd = mock_popen.call_args_list[-1][0][0]
         self.assertNotIn("--memory=eMMC", reset_cmd)
 
-    @patch("openstick.edl.subprocess.run")
+    @patch("openstick.edl.subprocess.Popen")
     @patch("openstick.edl.find_edl_runner", return_value=["edl"])
-    def test_run_edl_command_windows_driver_error_handling(self, mock_runner, mock_subproc):
-        mock_subproc.return_value = MagicMock(
+    def test_run_edl_command_windows_driver_error_handling(self, mock_runner, mock_popen):
+        mock_popen.return_value = FakeProcess(
             returncode=1,
-            stdout="",
             stderr="raise NotImplementedError(_strerror(ret))\nNotImplementedError: Operation not supported",
         )
-        with patch("sys.stderr.write") as mock_err_write:
-            ok = run_edl_command(["rf", "full_emmc.bin"])
-            self.assertFalse(ok)
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            self.assertFalse(run_edl_command(["rf", "full_emmc.bin"]))
 
-    @patch("openstick.edl.subprocess.run")
+        self.assertIn("Zadig", stderr.getvalue())
+
+    @patch("openstick.edl.subprocess.Popen")
     @patch("openstick.edl.find_edl_runner", return_value=["edl"])
-    def test_run_edl_command_sahara_firehose_error_handling(self, mock_runner, mock_subproc):
-        mock_subproc.return_value = MagicMock(
+    def test_run_edl_command_sahara_firehose_error_handling(self, mock_runner, mock_popen):
+        mock_popen.return_value = FakeProcess(
             returncode=1,
             stdout="main - Device detected :)\nmain - Mode detected: error\nConnection detected, quiting.",
-            stderr="",
         )
-        with patch("sys.stderr.write") as mock_err_write:
-            ok = run_edl_command(["rf", "full_emmc.bin"])
-            self.assertFalse(ok)
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            self.assertFalse(run_edl_command(["rf", "full_emmc.bin"]))
 
-    @patch("openstick.edl.subprocess.run")
+        self.assertIn("FIREHOSE", stderr.getvalue())
+
+    @patch("openstick.edl.subprocess.Popen")
     @patch("openstick.edl.find_edl_runner", return_value=["edl"])
-    def test_run_edl_command_sets_utf8_env(self, mock_runner, mock_subproc):
-        mock_subproc.return_value = MagicMock(returncode=0, stdout="Done", stderr="")
+    def test_run_edl_command_sets_utf8_env(self, mock_runner, mock_popen):
+        mock_popen.return_value = FakeProcess(stdout="Done")
         self.assertTrue(run_edl_command(["reset"]))
-        env_passed = mock_subproc.call_args[1]["env"]
+        env_passed = mock_popen.call_args[1]["env"]
         self.assertEqual(env_passed.get("PYTHONIOENCODING"), "utf-8")
         self.assertEqual(env_passed.get("PYTHONUTF8"), "1")
 

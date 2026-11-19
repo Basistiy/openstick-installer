@@ -9,6 +9,7 @@ import datetime
 import json
 import re
 import shutil
+import signal
 import sys
 import time
 from pathlib import Path
@@ -824,5 +825,29 @@ def main():
         sys.exit(0)
 
 
+def _handle_sigterm(_signum, _frame) -> None:
+    """Turn SIGTERM into the same clean shutdown path as Ctrl-C."""
+    edl.terminate_active_edl_processes()
+    raise KeyboardInterrupt
+
+
+def run_cli() -> int:
+    """Run the installer with graceful interrupt handling; return a process exit code."""
+    try:
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:
+        main()
+    except KeyboardInterrupt:
+        edl.terminate_active_edl_processes()
+        print(
+            "\n[!] Cancelled. A flash in progress leaves the stick in EDL mode; power-cycle it and re-run.",
+            file=sys.stderr,
+        )
+        return 130
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(run_cli())

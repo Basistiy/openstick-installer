@@ -1,5 +1,6 @@
 """Qualcomm EDL (Emergency Download / 9008 mode) and raw eMMC image engine."""
 
+import contextlib
 import os
 import re
 import shutil
@@ -7,12 +8,36 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 QUALCOMM_VID = 0x05C6
 QUALCOMM_EDL_PID = 0x9008
+
+_active_edl_processes: List[subprocess.Popen] = []
+
+
+def _terminate_process(proc: subprocess.Popen, timeout: float = 5.0) -> None:
+    """Terminate a child, escalating to kill if it does not exit in time."""
+    if proc.poll() is not None:
+        return
+    with contextlib.suppress(Exception):
+        proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(Exception):
+            proc.kill()
+            proc.wait(timeout=1)
+
+
+def terminate_active_edl_processes() -> None:
+    """Stop every EDL child started by this installer. Safe to call from a signal handler."""
+    for proc in list(_active_edl_processes):
+        _terminate_process(proc)
+
 
 DEFAULT_CALIBRATION_PARTITIONS = ["fsc", "fsg", "modemst1", "modemst2", "persist", "sec"]
 ALL_CALIBRATION_PARTITIONS = ["fsc", "fsg", "modem", "modemst1", "modemst2", "persist", "sec"]
@@ -229,8 +254,6 @@ def run_edl_command(args: List[str], loader: Optional[Path] = None, dry_run: boo
     if edl_dir.exists():
         env["PYTHONPATH"] = str(edl_dir) + os.pathsep + env.get("PYTHONPATH", "")
 
-    import threading
-
     stop_event = threading.Event()
     drew_progress = [False]
     start_time = time.time()
@@ -256,41 +279,63 @@ def run_edl_command(args: List[str], loader: Optional[Path] = None, dry_run: boo
     is_reset_cmd = bool(args and args[0] == "reset")
     cmd_timeout = 10 if is_reset_cmd else timeout
 
+    def _stop_spinner() -> None:
+        stop_event.set()
+        worker.join()
+        if drew_progress[0]:
+            sys.stdout.write("\r" + " " * 70 + "\r")
+            sys.stdout.flush()
+            drew_progress[0] = False
+
     try:
-        res = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             env=env,
             cwd=str(edl_dir) if edl_dir.exists() else None,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=cmd_timeout,
+            encoding="utf-8",
+            errors="replace",
         )
+    except OSError as e:
+        _stop_spinner()
+        print(f"[-] EDL execution error: {e}", file=sys.stderr)
+        return False
+
+    _active_edl_processes.append(proc)
+    try:
+        stdout, stderr = proc.communicate(timeout=cmd_timeout)
     except subprocess.TimeoutExpired:
-        stop_event.set()
-        worker.join()
-        if drew_progress[0]:
-            sys.stdout.write("\r" + " " * 70 + "\r")
-            sys.stdout.flush()
+        _terminate_process(proc)
+        try:
+            stdout, stderr = proc.communicate()
+        except Exception:
+            stdout, stderr = "", ""
+        _stop_spinner()
         if is_reset_cmd and not is_edl_connected():
             return True
+        tail_lines = (stdout or "").strip().splitlines()[-25:]
+        if tail_lines:
+            print("[-] EDL output before timeout:", file=sys.stderr)
+            for line in tail_lines:
+                print(f"    {line}", file=sys.stderr)
         print("[-] EDL command timed out.", file=sys.stderr)
         return False
     except Exception as e:
-        stop_event.set()
-        worker.join()
-        if drew_progress[0]:
-            sys.stdout.write("\r" + " " * 70 + "\r")
-            sys.stdout.flush()
+        _stop_spinner()
         if is_reset_cmd and not is_edl_connected():
             return True
         print(f"[-] EDL execution error: {e}", file=sys.stderr)
         return False
+    finally:
+        # Also runs on Ctrl-C/SIGTERM, so the child never keeps the stick in Firehose mode.
+        _terminate_process(proc)
+        _stop_spinner()
+        with contextlib.suppress(ValueError):
+            _active_edl_processes.remove(proc)
 
-    stop_event.set()
-    worker.join()
-    if drew_progress[0]:
-        sys.stdout.write("\r" + " " * 70 + "\r")
-        sys.stdout.flush()
+    res = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
     if is_reset_cmd:
         if res.returncode == 0 or not is_edl_connected():
