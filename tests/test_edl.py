@@ -26,6 +26,7 @@ from openstick.edl import (
     find_debugfs,
     DEFAULT_CALIBRATION_PARTITIONS,
     ALL_CALIBRATION_PARTITIONS,
+    SSH_HOST_KEY_FILES,
 )
 from tests.fakes import FakeProcess, write_valid_dump
 
@@ -263,6 +264,145 @@ class TestEdl(unittest.TestCase):
         ok, items = clean_rootfs_sensitive_data(self.synthetic_image, dry_run=True)
         self.assertTrue(ok)
         self.assertGreater(len(items), 0)
+        self.assertIn("(dry-run) ssh-check-hostkeys.service injected", items)
+
+    @patch("openstick.edl.subprocess.run")
+    @patch("openstick.edl.find_debugfs", return_value=Path("/usr/sbin/debugfs"))
+    def test_clean_rootfs_sensitive_data_removes_ssh_host_keys_and_injects_service(
+        self, mock_find_debugfs, mock_run
+    ):
+        # Write ext4 superblock magic (0xef53) at rootfs offset + 1080
+        gpt = parse_gpt_from_raw_image(self.synthetic_image)
+        rootfs_offset = gpt["rootfs"]["byte_offset"]
+        with open(self.synthetic_image, "r+b") as f:
+            f.seek(rootfs_offset + 1080)
+            f.write(b"\x53\xef")
+
+        class DummyCompleted:
+            def __init__(self, stdout=""):
+                self.returncode = 0
+                self.stdout = stdout
+                self.stderr = ""
+
+        def side_effect(cmd, **kwargs):
+            if "-R" in cmd and "ls -p /etc/ssh" in cmd:
+                return DummyCompleted(
+                    "/1395/100600/0/0/ssh_host_custom_key/411/\n"
+                    "/1403/100644/0/0/sshd_config/3424/\n"
+                )
+            return DummyCompleted()
+
+        mock_run.side_effect = side_effect
+
+        ok, cleaned = clean_rootfs_sensitive_data(self.synthetic_image, dry_run=False)
+        self.assertTrue(ok)
+        for key_path in SSH_HOST_KEY_FILES:
+            self.assertIn(key_path, cleaned)
+        self.assertIn("/etc/ssh/ssh_host_custom_key", cleaned)
+        self.assertNotIn("/etc/ssh/sshd_config", cleaned)
+        self.assertIn("/etc/systemd/system/ssh-check-hostkeys.service (injected)", cleaned)
+
+        write_calls = [
+            call for call in mock_run.call_args_list if "-w" in call[0][0]
+        ]
+        self.assertGreaterEqual(len(write_calls), 2)
+        rm_input = write_calls[0][1]["input"]
+        for key_path in SSH_HOST_KEY_FILES:
+            self.assertIn(f"rm {key_path}", rm_input)
+        self.assertIn("rm /etc/ssh/ssh_host_custom_key", rm_input)
+
+        service_input = write_calls[1][1]["input"]
+        self.assertIn("write ", service_input)
+        self.assertIn("/etc/systemd/system/ssh-check-hostkeys.service", service_input)
+        self.assertIn(
+            "symlink /etc/systemd/system/ssh.service.wants/ssh-check-hostkeys.service /etc/systemd/system/ssh-check-hostkeys.service",
+            service_input,
+        )
+        self.assertIn(
+            "symlink /etc/systemd/system/sshd.service.wants/ssh-check-hostkeys.service /etc/systemd/system/ssh-check-hostkeys.service",
+            service_input,
+        )
+
+    def test_clean_rootfs_sensitive_data_real_ext4(self):
+        import subprocess
+
+        debugfs_bin = find_debugfs()
+        if not debugfs_bin:
+            self.skipTest("debugfs not available")
+        mke2fs_bin = debugfs_bin.parent / "mke2fs"
+        if not mke2fs_bin.is_file():
+            self.skipTest("mke2fs not available")
+
+        img_path = self.test_dir / "real_ext4_emmc.bin"
+        partitions = [
+            ("boot", 40, 64),
+            ("rootfs", 200, 8192),  # 4 MiB ext4 partition
+        ]
+        create_synthetic_raw_image(img_path, partitions=partitions)
+        gpt = parse_gpt_from_raw_image(img_path)
+        rootfs_offset = gpt["rootfs"]["byte_offset"]
+        rootfs_size = gpt["rootfs"]["byte_size"]
+
+        ext4_slice = self.test_dir / "rootfs.ext4"
+        ext4_slice.write_bytes(b"\x00" * rootfs_size)
+        subprocess.run([str(mke2fs_bin), "-F", str(ext4_slice)], capture_output=True, check=True)
+
+        dummy_key = self.test_dir / "dummy_key"
+        dummy_key.write_text("PRIVATE_KEY_DATA\n", encoding="utf-8")
+        dummy_cfg = self.test_dir / "sshd_config"
+        dummy_cfg.write_text("Port 22\n", encoding="utf-8")
+
+        seed_cmds = [
+            "mkdir /etc",
+            "mkdir /etc/ssh",
+            f"write {dummy_key} /etc/ssh/ssh_host_ed25519_key",
+            f"write {dummy_key} /etc/ssh/ssh_host_ed25519_key.pub",
+            f"write {dummy_cfg} /etc/ssh/sshd_config",
+        ]
+        subprocess.run(
+            [str(debugfs_bin), "-w", str(ext4_slice)],
+            input="\n".join(seed_cmds) + "\n",
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        with open(img_path, "r+b") as f:
+            f.seek(rootfs_offset)
+            f.write(ext4_slice.read_bytes())
+
+        ok, cleaned = clean_rootfs_sensitive_data(img_path, inject_led_test=False)
+        self.assertTrue(ok)
+        self.assertIn("/etc/ssh/ssh_host_ed25519_key", cleaned)
+        self.assertIn("/etc/systemd/system/ssh-check-hostkeys.service (injected)", cleaned)
+
+        target = f"{img_path}?offset={rootfs_offset}"
+        ls_ssh = subprocess.run(
+            [str(debugfs_bin), "-R", "ls -p /etc/ssh", target],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertNotIn("ssh_host_ed25519_key", ls_ssh.stdout)
+        self.assertIn("sshd_config", ls_ssh.stdout)
+
+        cat_unit = subprocess.run(
+            [str(debugfs_bin), "-R", "cat /etc/systemd/system/ssh-check-hostkeys.service", target],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertIn("ExecStart=/usr/bin/ssh-keygen -A", cat_unit.stdout)
+        self.assertIn("ConditionPathExists=|!/etc/ssh/ssh_host_ed25519_key", cat_unit.stdout)
+
+        stat_link = subprocess.run(
+            [str(debugfs_bin), "-R", "stat /etc/systemd/system/ssh.service.wants/ssh-check-hostkeys.service", target],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertIn("Type: symlink", stat_link.stdout)
+        self.assertIn("/etc/systemd/system/ssh-check-hostkeys.service", stat_link.stdout)
 
     def test_compress_raw_image_to_zip_dry_run(self):
         out_zip = self.test_dir / "test_out.zip"

@@ -675,19 +675,58 @@ def find_debugfs() -> Optional[Path]:
     return None
 
 
+SSH_HOST_KEY_FILES = [
+    "/etc/ssh/ssh_host_ecdsa_key",
+    "/etc/ssh/ssh_host_ecdsa_key.pub",
+    "/etc/ssh/ssh_host_ed25519_key",
+    "/etc/ssh/ssh_host_ed25519_key.pub",
+    "/etc/ssh/ssh_host_rsa_key",
+    "/etc/ssh/ssh_host_rsa_key.pub",
+    "/etc/ssh/ssh_host_dsa_key",
+    "/etc/ssh/ssh_host_dsa_key.pub",
+]
+
+SSH_CHECK_HOSTKEYS_SERVICE_CONTENT = """[Unit]
+Description=Regenerate SSH host keys if they're missing
+PartOf=ssh.service
+Before=ssh.service sshd.service sshd@.service
+
+ConditionPathExists=|!/etc/ssh/ssh_host_ecdsa_key
+ConditionPathExists=|!/etc/ssh/ssh_host_ecdsa_key.pub
+ConditionPathExists=|!/etc/ssh/ssh_host_ed25519_key
+ConditionPathExists=|!/etc/ssh/ssh_host_ed25519_key.pub
+ConditionPathExists=|!/etc/ssh/ssh_host_rsa_key
+ConditionPathExists=|!/etc/ssh/ssh_host_rsa_key.pub
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+StandardOutput=journal
+
+[Install]
+WantedBy=ssh.service sshd.service
+"""
+
+
 def clean_rootfs_sensitive_data(
     image_path: Path,
     inject_led_test: bool = True,
+    inject_ssh_hostkey_service: bool = True,
     dry_run: bool = False,
 ) -> Tuple[bool, List[str]]:
     """
-    Remove sensitive user artifacts (.bash_history, ssh known_hosts, logs)
-    directly from the ext4 rootfs partition inside a raw eMMC image using debugfs.
-    Also ensures /usr/local/bin/led-test is injected with mode 0755.
+    Remove sensitive user and host artifacts (.bash_history, user SSH keys,
+    SSH host keys, logs) directly from the ext4 rootfs partition inside a raw eMMC
+    image using debugfs. Also installs ssh-check-hostkeys.service to regenerate
+    SSH host keys on first boot and ensures /usr/local/bin/led-test is injected.
     """
     if dry_run:
         print(f"[DRY-RUN] Simulating rootfs sensitive data cleanup on {image_path.name}...")
-        return True, ["(dry-run) sensitive files cleaned", "(dry-run) led-test injected"]
+        return True, [
+            "(dry-run) sensitive files cleaned",
+            "(dry-run) ssh-check-hostkeys.service injected",
+            "(dry-run) led-test injected",
+        ]
 
     try:
         gpt = parse_gpt_from_raw_image(image_path)
@@ -735,6 +774,7 @@ def clean_rootfs_sensitive_data(
         "/root/.ssh/id_ed25519.pub",
         "/root/.ssh/id_rsa",
         "/root/.ssh/id_rsa.pub",
+        *SSH_HOST_KEY_FILES,
         "/var/log/wtmp",
         "/var/log/wtmp.db",
         "/var/log/btmp",
@@ -743,6 +783,25 @@ def clean_rootfs_sensitive_data(
         "/var/log/syslog",
         "/var/log/messages",
     ]
+
+    # Discover any additional /etc/ssh/ssh_host_* files dynamically
+    try:
+        ls_ssh = subprocess.run(
+            [str(debugfs_bin), "-R", "ls -p /etc/ssh", debugfs_target],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        for line in (ls_ssh.stdout or "").splitlines():
+            parts = line.strip().strip("/").split("/")
+            if len(parts) >= 5:
+                mode_str, entry_name = parts[1], parts[4]
+                if entry_name.startswith("ssh_host_") and not mode_str.startswith("04"):
+                    candidate = f"/etc/ssh/{entry_name}"
+                    if candidate not in files_to_remove:
+                        files_to_remove.append(candidate)
+    except Exception:
+        pass
 
     # Also discover and remove systemd binary journal files (/var/log/journal/<machine-id>/*.journal*)
     # which can otherwise retain ModemManager IMEI and session logs.
@@ -790,7 +849,40 @@ def clean_rootfs_sensitive_data(
             timeout=60,
         )
 
-        # Step 2: Inject /usr/local/bin/led-test if requested
+        # Step 2: Inject ssh-check-hostkeys.service to regenerate SSH host keys on first boot
+        if inject_ssh_hostkey_service:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                unit_file = Path(tmpdir) / "ssh-check-hostkeys.service"
+                unit_file.write_text(SSH_CHECK_HOSTKEYS_SERVICE_CONTENT, encoding="utf-8")
+                unit_dest = "/etc/systemd/system/ssh-check-hostkeys.service"
+                ssh_want = "/etc/systemd/system/ssh.service.wants/ssh-check-hostkeys.service"
+                sshd_want = "/etc/systemd/system/sshd.service.wants/ssh-check-hostkeys.service"
+                hostkey_cmds = [
+                    "mkdir /etc",
+                    "mkdir /etc/systemd",
+                    "mkdir /etc/systemd/system",
+                    "mkdir /etc/systemd/system/ssh.service.wants",
+                    "mkdir /etc/systemd/system/sshd.service.wants",
+                    f"rm {unit_dest}",
+                    f"write {unit_file} {unit_dest}",
+                    f"set_inode_field {unit_dest} mode 0100644",
+                    f"set_inode_field {unit_dest} uid 0",
+                    f"set_inode_field {unit_dest} gid 0",
+                    f"rm {ssh_want}",
+                    f"symlink {ssh_want} {unit_dest}",
+                    f"rm {sshd_want}",
+                    f"symlink {sshd_want} {unit_dest}",
+                ]
+                subprocess.run(
+                    [str(debugfs_bin), "-w", debugfs_target],
+                    input="\n".join(hostkey_cmds) + "\n",
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                cleaned_items.append(f"{unit_dest} (injected)")
+
+        # Step 3: Inject /usr/local/bin/led-test if requested
         if inject_led_test:
             repo_root = Path(__file__).resolve().parent.parent
             led_test_script = repo_root / "openstick" / "scripts" / "led-test"

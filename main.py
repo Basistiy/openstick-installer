@@ -620,7 +620,8 @@ def handle_create_release_image(
 
     print("\n[*] Sanitizing raw eMMC dump offline...")
     print("    - Zeroing unique IMEI, radio calibration, and private data partitions...")
-    print("    - Cleaning rootfs command history, SSH keys, and system logs...")
+    print("    - Cleaning rootfs command history, user & host SSH keys, and system logs...")
+    print("    - Installing first-boot SSH host key regeneration service...")
     print("    - Ensuring /usr/local/bin/led-test is installed in rootfs...")
     ok, summary = edl.sanitize_raw_image(raw_image, clean_rootfs=True, dry_run=dry_run)
     if not ok:
