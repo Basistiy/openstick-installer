@@ -9,6 +9,7 @@ import datetime
 import json
 import re
 import shutil
+import signal
 import sys
 import time
 from pathlib import Path
@@ -778,23 +779,14 @@ def main():
     do_backup = prompt_backup_partitions()
     if do_backup:
         backup_ok, backup_dir = handle_partition_backup(device, dry_run=args.dry_run)
-        if not backup_ok:
+        if not backup_ok or backup_dir is None:
             print("\n" + "!" * 65, file=sys.stderr)
-            print(" [!] CRITICAL WARNING: Partition backup failed or was interrupted!", file=sys.stderr)
-            print("     Flashing without a verified backup risks PERMANENTLY losing", file=sys.stderr)
-            print("     unique cellular calibration and modem IMEI data.", file=sys.stderr)
+            print(" [!] Backup failed or did not verify. Aborting before any flash or", file=sys.stderr)
+            print("     calibration reuse, so unique IMEI/RF calibration cannot be lost.", file=sys.stderr)
             print("!" * 65 + "\n", file=sys.stderr)
-            if not args.dry_run:
-                try:
-                    proceed = input("Do you want to ABORT to protect your device? (Recommended) [Y/n]: ").strip().lower()
-                    if not proceed or proceed in ("y", "yes"):
-                        print("\n[+] Aborting to protect device. Fix the backup issue before flashing.")
-                        sys.exit(1)
-                except (KeyboardInterrupt, EOFError):
-                    print("\nAborted.")
-                    sys.exit(1)
-        else:
-            print("[+] Backup finished successfully!")
+            print("    No changes were made to the device. Re-run and take a verified backup first.")
+            sys.exit(1)
+        print("[+] Backup finished successfully!")
     else:
         print("\n[*] Skipping partition backup at user request.")
         calibration_dir = (PROJECT_ROOT / ".cache" / "dry_run_calibration") if args.dry_run else (PROJECT_ROOT / "calibration")
@@ -804,7 +796,12 @@ def main():
             latest_backup = edl.find_latest_valid_backup(PROJECT_ROOT, device.id)
             if latest_backup:
                 print(f"[+] Found existing backup in: {latest_backup.name}")
-                edl.extract_partitions_from_raw_image(latest_backup / "full_emmc.bin", calibration_dir)
+                if not edl.extract_partitions_from_raw_image(latest_backup / "full_emmc.bin", calibration_dir):
+                    print("[-] Could not extract calibration from that backup. Aborting.", file=sys.stderr)
+                    sys.exit(1)
+                if not edl.has_valid_calibration(calibration_dir, device.critical_partitions):
+                    print("[-] That backup does not contain complete calibration data. Aborting.", file=sys.stderr)
+                    sys.exit(1)
 
     # Step 3: Action Selection (Install Linux vs. Restore Stock Backup vs. Create Release vs. Exit)
     action = show_action_menu(device)
@@ -824,5 +821,29 @@ def main():
         sys.exit(0)
 
 
+def _handle_sigterm(_signum, _frame) -> None:
+    """Turn SIGTERM into the same clean shutdown path as Ctrl-C."""
+    edl.terminate_active_edl_processes()
+    raise KeyboardInterrupt
+
+
+def run_cli() -> int:
+    """Run the installer with graceful interrupt handling; return a process exit code."""
+    try:
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:
+        main()
+    except KeyboardInterrupt:
+        edl.terminate_active_edl_processes()
+        print(
+            "\n[!] Cancelled. A flash in progress leaves the stick in EDL mode; power-cycle it and re-run.",
+            file=sys.stderr,
+        )
+        return 130
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(run_cli())

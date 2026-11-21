@@ -1,5 +1,6 @@
 """Qualcomm EDL (Emergency Download / 9008 mode) and raw eMMC image engine."""
 
+import contextlib
 import os
 import re
 import shutil
@@ -7,12 +8,36 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 QUALCOMM_VID = 0x05C6
 QUALCOMM_EDL_PID = 0x9008
+
+_active_edl_processes: List[subprocess.Popen] = []
+
+
+def _terminate_process(proc: subprocess.Popen, timeout: float = 5.0) -> None:
+    """Terminate a child, escalating to kill if it does not exit in time."""
+    if proc.poll() is not None:
+        return
+    with contextlib.suppress(Exception):
+        proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(Exception):
+            proc.kill()
+            proc.wait(timeout=1)
+
+
+def terminate_active_edl_processes() -> None:
+    """Stop every EDL child started by this installer. Safe to call from a signal handler."""
+    for proc in list(_active_edl_processes):
+        _terminate_process(proc)
+
 
 DEFAULT_CALIBRATION_PARTITIONS = ["fsc", "fsg", "modemst1", "modemst2", "persist", "sec"]
 ALL_CALIBRATION_PARTITIONS = ["fsc", "fsg", "modem", "modemst1", "modemst2", "persist", "sec"]
@@ -229,8 +254,6 @@ def run_edl_command(args: List[str], loader: Optional[Path] = None, dry_run: boo
     if edl_dir.exists():
         env["PYTHONPATH"] = str(edl_dir) + os.pathsep + env.get("PYTHONPATH", "")
 
-    import threading
-
     stop_event = threading.Event()
     drew_progress = [False]
     start_time = time.time()
@@ -256,41 +279,63 @@ def run_edl_command(args: List[str], loader: Optional[Path] = None, dry_run: boo
     is_reset_cmd = bool(args and args[0] == "reset")
     cmd_timeout = 10 if is_reset_cmd else timeout
 
+    def _stop_spinner() -> None:
+        stop_event.set()
+        worker.join()
+        if drew_progress[0]:
+            sys.stdout.write("\r" + " " * 70 + "\r")
+            sys.stdout.flush()
+            drew_progress[0] = False
+
     try:
-        res = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             env=env,
             cwd=str(edl_dir) if edl_dir.exists() else None,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=cmd_timeout,
+            encoding="utf-8",
+            errors="replace",
         )
+    except OSError as e:
+        _stop_spinner()
+        print(f"[-] EDL execution error: {e}", file=sys.stderr)
+        return False
+
+    _active_edl_processes.append(proc)
+    try:
+        stdout, stderr = proc.communicate(timeout=cmd_timeout)
     except subprocess.TimeoutExpired:
-        stop_event.set()
-        worker.join()
-        if drew_progress[0]:
-            sys.stdout.write("\r" + " " * 70 + "\r")
-            sys.stdout.flush()
+        _terminate_process(proc)
+        try:
+            stdout, stderr = proc.communicate()
+        except Exception:
+            stdout, stderr = "", ""
+        _stop_spinner()
         if is_reset_cmd and not is_edl_connected():
             return True
+        tail_lines = (stdout or "").strip().splitlines()[-25:]
+        if tail_lines:
+            print("[-] EDL output before timeout:", file=sys.stderr)
+            for line in tail_lines:
+                print(f"    {line}", file=sys.stderr)
         print("[-] EDL command timed out.", file=sys.stderr)
         return False
     except Exception as e:
-        stop_event.set()
-        worker.join()
-        if drew_progress[0]:
-            sys.stdout.write("\r" + " " * 70 + "\r")
-            sys.stdout.flush()
+        _stop_spinner()
         if is_reset_cmd and not is_edl_connected():
             return True
         print(f"[-] EDL execution error: {e}", file=sys.stderr)
         return False
+    finally:
+        # Also runs on Ctrl-C/SIGTERM, so the child never keeps the stick in Firehose mode.
+        _terminate_process(proc)
+        _stop_spinner()
+        with contextlib.suppress(ValueError):
+            _active_edl_processes.remove(proc)
 
-    stop_event.set()
-    worker.join()
-    if drew_progress[0]:
-        sys.stdout.write("\r" + " " * 70 + "\r")
-        sys.stdout.flush()
+    res = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
     if is_reset_cmd:
         if res.returncode == 0 or not is_edl_connected():
@@ -455,6 +500,64 @@ def parse_gpt_from_raw_image(image_path: Path) -> Dict[str, Dict]:
         return partitions
 
 
+def _image_matches_gpt_size(image_path: Path) -> Tuple[bool, str]:
+    """A raw dump is only complete when its file size matches the GPT's declared total."""
+    try:
+        gpt = parse_gpt_from_raw_image(image_path)
+    except Exception as e:
+        return False, f"could not parse GPT header: {e}"
+    declared = gpt.get("__metadata__", {}).get("total_bytes", 0)
+    if declared <= 0:
+        return False, "GPT header declares no total size"
+    actual = image_path.stat().st_size
+    if actual != declared:
+        return False, f"image is {actual} bytes but the GPT declares {declared} bytes (truncated or padded)"
+    return True, ""
+
+
+def _discard_incomplete_backup(backup_dir: Path) -> None:
+    """Remove a partial dump and its sidecars so they cannot be mistaken for a valid backup."""
+    with contextlib.suppress(OSError):
+        (backup_dir / "full_emmc.bin").unlink(missing_ok=True)
+    calib = backup_dir / "calibration"
+    if calib.is_dir():
+        for child in calib.iterdir():
+            if child.is_file():
+                with contextlib.suppress(OSError):
+                    child.unlink()
+
+
+def _validate_extracted_sidecars(image_path: Path, calibration_dir: Path) -> Tuple[bool, str]:
+    """Refuse sidecars that are missing, empty, or shorter than their GPT partition slot."""
+    try:
+        gpt = parse_gpt_from_raw_image(image_path)
+    except Exception as e:
+        return False, f"could not parse GPT header: {e}"
+    for part_name in ALL_CALIBRATION_PARTITIONS:
+        if part_name not in gpt:
+            continue
+        sidecar = calibration_dir / f"{part_name}.bin"
+        if not sidecar.is_file():
+            return False, f"missing calibration sidecar {sidecar.name}"
+        expected = gpt[part_name]["byte_size"]
+        actual = sidecar.stat().st_size
+        if actual != expected:
+            return False, f"{sidecar.name} is {actual} bytes but its GPT slot is {expected} bytes"
+        if part_name != "fsc" and not _is_file_non_zero(sidecar):
+            return False, f"{sidecar.name} is empty or all zeros"
+    return True, ""
+
+
+def _extract_verified_sidecars(image_path: Path, calibration_dir: Path) -> Tuple[bool, str]:
+    """A dump may only feed calibration reuse once it is complete and its sidecars are usable."""
+    complete, reason = _image_matches_gpt_size(image_path)
+    if not complete:
+        return False, reason
+    if not extract_partitions_from_raw_image(image_path, calibration_dir):
+        return False, "calibration sidecars could not be extracted"
+    return _validate_extracted_sidecars(image_path, calibration_dir)
+
+
 def extract_partitions_from_raw_image(
     image_path: Path,
     output_dir: Path,
@@ -472,42 +575,28 @@ def extract_partitions_from_raw_image(
         print(f"[-] GPT parse error for {image_path}: {e}", file=sys.stderr)
         return False
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    image_size = image_path.stat().st_size
-    all_success = True
-
+    # Read everything before writing, so a truncated dump leaves no short sidecars behind.
+    extracted: Dict[str, bytes] = {}
     with open(image_path, "rb") as f:
         for part_name in partitions:
             if part_name not in gpt:
                 continue
             info = gpt[part_name]
-            required_size = info["byte_size"]
-            offset = info["byte_offset"]
-
-            if offset + required_size > image_size:
+            f.seek(info["byte_offset"])
+            data = f.read(info["byte_size"])
+            if len(data) != info["byte_size"]:
                 print(
-                    f"[-] Image {image_path.name} is truncated or partition {part_name} extends "
-                    f"beyond file size ({offset + required_size} > {image_size}). Refusing to write empty partition.",
+                    f"[-] Truncated image: {part_name} needs {info['byte_size']} bytes, got {len(data)}.",
                     file=sys.stderr,
                 )
-                all_success = False
-                continue
+                return False
+            extracted[part_name] = data
 
-            f.seek(offset)
-            data = f.read(required_size)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for part_name, data in extracted.items():
+        (output_dir / f"{part_name}.bin").write_bytes(data)
 
-            if len(data) != required_size or len(data) == 0:
-                print(
-                    f"[-] Incomplete read for partition {part_name} ({len(data)}/{required_size} bytes). Skipping.",
-                    file=sys.stderr,
-                )
-                all_success = False
-                continue
-
-            out_file = output_dir / f"{part_name}.bin"
-            out_file.write_bytes(data)
-
-    return all_success
+    return True
 
 
 def sanitize_raw_image(
@@ -801,36 +890,43 @@ def inject_partitions_into_raw_image(
     gpt = parse_gpt_from_raw_image(image_path)
     injected: List[str] = []
 
+    # Validate every source before opening the target, so a bad sidecar cannot leave a half-injected image.
+    sources: Dict[str, Path] = {}
+    for part_name in partitions:
+        if part_name not in gpt:
+            continue
+        source_file = calibration_dir / f"{part_name}.bin"
+        if not source_file.exists():
+            img_candidate = calibration_dir / f"{part_name}.img"
+            if img_candidate.exists():
+                source_file = img_candidate
+        if not source_file.exists():
+            continue
+        slot_size = gpt[part_name]["byte_size"]
+        if source_file.stat().st_size == 0:
+            print(f"[-] Refusing to inject empty calibration file: {source_file}", file=sys.stderr)
+            return False, []
+        if source_file.stat().st_size > slot_size:
+            print(
+                f"[-] Refusing to inject oversized calibration file: {source_file.name} "
+                f"(target slot is {slot_size} bytes).",
+                file=sys.stderr,
+            )
+            return False, []
+        if part_name != "fsc" and not _is_file_non_zero(source_file):
+            print(f"[-] Refusing to inject blank calibration file: {source_file.name} (all zero bytes).", file=sys.stderr)
+            return False, []
+        sources[part_name] = source_file
+
     with open(image_path, "r+b") as f:
         for part_name in partitions:
-            if part_name not in gpt:
-                continue
-
-            # Check for <part_name>.bin or <part_name>.img in calibration_dir
-            source_file = calibration_dir / f"{part_name}.bin"
-            if not source_file.exists():
-                img_candidate = calibration_dir / f"{part_name}.img"
-                if img_candidate.exists():
-                    source_file = img_candidate
-
-            if not source_file.exists():
-                continue
-
-            if source_file.stat().st_size == 0:
-                print(f"[!] Warning: {source_file.name} is 0 bytes (empty). Skipping injection.", file=sys.stderr)
-                continue
-
-            if part_name != "fsc" and not _is_file_non_zero(source_file):
-                print(f"[!] Warning: {source_file.name} contains only zero bytes (sanitized/blank). Skipping injection.", file=sys.stderr)
+            source_file = sources.get(part_name)
+            if source_file is None:
                 continue
 
             part_bytes = source_file.read_bytes()
             target_info = gpt[part_name]
             target_size = target_info["byte_size"]
-
-            if len(part_bytes) > target_size:
-                print(f"[!] Warning: {source_file.name} ({len(part_bytes)} bytes) exceeds target partition slot ({target_size} bytes). Skipping.", file=sys.stderr)
-                continue
 
             f.seek(target_info["byte_offset"])
             f.write(part_bytes)
@@ -891,35 +987,21 @@ def execute_raw_emmc_backup(
     print(f"[*] Dumping full raw eMMC to: {image_path.name} (this takes ~8-10 minutes)...")
     ok = run_edl_command(["rf", str(image_path)], loader=loader, dry_run=dry_run, timeout=2400)
     if not ok or not image_path.exists():
-        print("[-] Full eMMC clone failed or was cancelled.", file=sys.stderr)
-        return False
-
-    # Verify that the dumped image has valid GPT and is not truncated
-    try:
-        gpt = parse_gpt_from_raw_image(image_path)
-        min_required = max(
-            (info["byte_offset"] + info["byte_size"] for k, info in gpt.items() if k != "__metadata__"),
-            default=0,
-        )
-        if image_path.stat().st_size < min_required:
-            print(
-                f"[-] Dumped eMMC image is truncated ({image_path.stat().st_size} bytes < {min_required} required bytes).",
-                file=sys.stderr,
-            )
-            return False
-    except Exception as e:
-        print(f"[-] GPT validation error on dumped eMMC image: {e}", file=sys.stderr)
+        _discard_incomplete_backup(backup_dir)
+        print("[-] Full eMMC clone failed or was cancelled. Partial files were discarded.", file=sys.stderr)
         return False
 
     print("[*] Automatically extracting calibration sidecars from raw eMMC dump...")
     archived_calib = backup_dir / "calibration"
-    if not extract_partitions_from_raw_image(image_path, archived_calib):
-        print("[-] Failed extracting calibration sidecars from raw image.", file=sys.stderr)
+    sidecars_ok, reason = _extract_verified_sidecars(image_path, archived_calib)
+    if not sidecars_ok:
+        _discard_incomplete_backup(backup_dir)
+        print(f"[-] Refusing incomplete backup: {reason}. Partial files were discarded.", file=sys.stderr)
         return False
 
     if calibration_dir:
         if not extract_partitions_from_raw_image(image_path, calibration_dir):
-            print("[-] Failed extracting calibration partitions to active calibration directory.", file=sys.stderr)
+            print("[-] Could not stage calibration files in the active calibration folder.", file=sys.stderr)
             return False
         print(f"[+] Unique device calibration files extracted to: {calibration_dir}")
 
@@ -1124,7 +1206,13 @@ def flash_raw_emmc_via_edl(
                 return False
             print(f"[+] Size check: {reason}.")
 
-    if inject_calibration and calibration_dir:
+    if inject_calibration:
+        if calibration_dir is None:
+            print(
+                "[-] Calibration injection was requested but no calibration directory was given. Refusing to flash.",
+                file=sys.stderr,
+            )
+            return False
         print(f"[*] Injecting unique calibration files from {calibration_dir} into {image_path.name}...")
         ok, injected = inject_partitions_into_raw_image(
             image_path=image_path,
@@ -1132,10 +1220,12 @@ def flash_raw_emmc_via_edl(
             dry_run=dry_run,
         )
         if not ok:
-            print("[-] Calibration injection failed.", file=sys.stderr)
+            print("[-] Calibration injection failed. Refusing to flash.", file=sys.stderr)
             return False
-        if ok and injected:
-            print(f"[+] Successfully injected {len(injected)} partitions: {', '.join(injected)}")
+        if not injected:
+            print("[-] No calibration partitions were injected; the image may be sanitized. Refusing to flash.", file=sys.stderr)
+            return False
+        print(f"[+] Successfully injected {len(injected)} partitions: {', '.join(injected)}")
 
         if not dry_run:
             try:
@@ -1255,29 +1345,19 @@ def find_latest_valid_backup(
         if not img.exists() or img.stat().st_size == 0:
             continue
 
-        is_stock_layout = False
-        min_required = 0
         try:
             gpt = parse_gpt_from_raw_image(img)
-            if _is_raw_image_sanitized(img, gpt):
-                continue
-            is_stock_layout = "system" in gpt
-            min_required = max(
-                (info["byte_offset"] + info["byte_size"] for k, info in gpt.items() if k != "__metadata__"),
-                default=0,
-            )
-            if min_required > 0 and img.stat().st_size < min_required:
-                # Raw image is truncated / incomplete dump
-                continue
+            size_ok, _ = _image_matches_gpt_size(img)
         except Exception:
-            # Allow minimal test files without full GPT if calibration sidecars aren't zeroed
-            pass
+            continue
+        if not size_ok or _is_raw_image_sanitized(img, gpt):
+            continue
 
         calib_subdir = c / "calibration"
         if calib_subdir.exists() and not has_valid_calibration(calib_subdir):
             continue
 
-        valid_candidates.append((is_stock_layout, c))
+        valid_candidates.append(("system" in gpt, c))
 
     if not valid_candidates:
         return None
@@ -1296,12 +1376,13 @@ def find_latest_valid_backup(
 
 def create_synthetic_raw_image(
     image_path: Path,
-    num_total_sectors: int = 7634944,  # ~3.64 GB standard eMMC
+    num_total_sectors: Optional[int] = None,
     partitions: Optional[List[Tuple[str, int, int]]] = None,
 ) -> None:
     """
     Generate a minimal synthetic raw eMMC image containing a valid Protective MBR,
-    Primary GPT Header, and partition entries array for testing.
+    Primary GPT Header, and partition entries array for testing. The declared eMMC size
+    defaults to the generated file's own size, so the GPT never lies about the dump.
     """
     import zlib
 
@@ -1328,6 +1409,8 @@ def create_synthetic_raw_image(
     max_sector = max(s + count for _, s, count in partitions)
     header_sectors = 34  # MBR (0) + GPT Header (1) + 32 sectors for 128 entries
     file_sectors = max(max_sector, header_sectors + 64)
+    if num_total_sectors is None:
+        num_total_sectors = file_sectors
 
     image_path.parent.mkdir(parents=True, exist_ok=True)
     with open(image_path, "wb") as f:
