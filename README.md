@@ -82,6 +82,26 @@ Launch the installer using `run.bat` (Windows), `run.command` (macOS), or `./run
 
 ---
 
+### Option 3: Run via Docker
+
+Build the image, then run with USB device access (required for EDL flashing):
+
+```bash
+docker build --tag openstick-installer .
+docker run --interactive --tty --privileged --volume /dev/bus/usb:/dev/bus/usb openstick-installer
+```
+
+Pass installer CLI arguments directly, e.g.:
+
+```bash
+docker run --interactive --tty --privileged --volume /dev/bus/usb:/dev/bus/usb openstick-installer --help
+```
+
+> [!NOTE]
+> **`--privileged` and `--volume /dev/bus/usb` are required** — the installer talks to the stick over raw USB in Qualcomm 9008 EDL mode. Without device passthrough, no USB devices will be visible inside the container.
+
+---
+
 ## Flashing Process
 
 ```mermaid
