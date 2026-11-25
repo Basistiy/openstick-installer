@@ -1,0 +1,43 @@
+# Git
+.git
+.gitattributes
+.gitignore
+.github
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Docs & notes
+README.md
+LICENSE
+plan.md
+
+# Launchers (host scripts, not needed in image)
+run.sh
+run.bat
+run.command
+
+# Tests
+tests/
+
+# Dev tooling
+scripts/
+.unipi/
+
+# Backups & calibration data
+backups/
+calibration/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# Runtime artifacts
+*.img
+*.bin
+*.mbn.bak
